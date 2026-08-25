@@ -1,0 +1,8 @@
+config HAVE_ARCH_KTSAN
+	bool
+
+config KTSAN
+	bool "ThreadSanitizer: dynamic data race error detector"
+    depends on HAVE_ARCH_KTSAN
+    depends on !KCSAN && !KMSAN && !KASAN
+    default n

@@ -36,6 +36,8 @@
 #include "slab.h"
 #include "shuffle.h"
 
+#include <linux/ktsan.h>
+
 #include <asm/setup.h>
 
 #ifndef CONFIG_NUMA
@@ -2480,6 +2482,11 @@ void __init memblock_free_pages(unsigned long pfn, unsigned int order)
 		return;
 	}
 
+	if (!ktsan_memblock_free_pages(page, order)) {
+		/* KTSAN will take care of these pages. */
+		return;
+	}
+
 	/* pages were reserved and not allocated */
 	clear_page_tag_ref(page);
 	__free_pages_core(page, order, MEMINIT_EARLY);
@@ -2712,6 +2719,7 @@ void __init mm_core_init(void)
 	kfence_alloc_pool_and_metadata();
 	report_meminit();
 	kmsan_init_shadow();
+	ktsan_init_shadow();
 	stack_depot_early_init();
 
 	/*
@@ -2741,6 +2749,7 @@ void __init mm_core_init(void)
 	/* Should be run after espfix64 is set up. */
 	pti_init();
 	kmsan_init_runtime();
+	ktsan_init_runtime();
 	mm_cache_init();
 	execmem_init();
 }

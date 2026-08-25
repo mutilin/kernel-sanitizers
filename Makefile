@@ -571,6 +571,7 @@ CFLAGS_KERNEL	=
 RUSTFLAGS_KERNEL =
 AFLAGS_KERNEL	=
 LDFLAGS_vmlinux =
+CFLAGS_KTSAN	= -fsanitize=thread
 
 # Use USERINCLUDE when you must reference the UAPI directories only.
 USERINCLUDE    := \

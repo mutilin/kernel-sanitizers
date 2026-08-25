@@ -219,6 +219,27 @@ struct page {
 	struct page *kmsan_shadow;
 	struct page *kmsan_origin;
 #endif
+
+#ifdef CONFIG_KTSAN
+	/*
+	 * KTSAN metadata for this page:
+	 *  - 4 shadow pages: every 8 bytes indicate the data on thread 
+	 *    access to the corresponding 8 byte of the original page
+	 *    (with the ability to track 4 byte acceses via offset bits),
+	 *    keeping up to 4 accesses simultaneously.
+	 *	
+	 *	shadow_byte {
+	 *		tid	: 12
+	 *		clock	: 44
+	 *		offset  :  3
+	 *		size	:  2
+	 *		read    :  1
+	 *		atomic  :  1
+	 *	}
+	 */    
+	struct page *ktsan_shadow;
+#endif
+
 } _struct_page_alignment;
 
 /*

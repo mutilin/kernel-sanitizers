@@ -105,6 +105,12 @@ _c_flags += $(if $(patsubst n%,, \
 	-D__KCSAN_INSTRUMENT_BARRIERS__)
 endif
 
+ifeq ($(CONFIG_KTSAN),y)
+_c_flags += $(if $(patsubst n%,, \
+	$(KTSAN_SANITIZE_$(target-stem).o)$(KTSAN_SANITIZE)$(is-kernel-object)), \
+	$(CFLAGS_KTSAN))
+endif
+
 #
 # Enable context analysis flags only where explicitly opted in.
 # (depends on variables CONTEXT_ANALYSIS_obj.o, CONTEXT_ANALYSIS)
