@@ -223,8 +223,8 @@ struct page {
 #ifdef CONFIG_KTSAN
 	/*
 	 * KTSAN metadata for this page:
-	 *  - 4 shadow pages: every 8 bytes indicate the data on thread 
-	 *    access to the corresponding 8 byte of the original page
+	 *  - 4 shadow pages: every 8 bytes of them indicate the data on 
+	 *    thread access to the corresponding 8 byte of the original page
 	 *    (with the ability to track 4 byte acceses via offset bits),
 	 *    keeping up to 4 accesses simultaneously.
 	 *	

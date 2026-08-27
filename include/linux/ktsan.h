@@ -8,24 +8,36 @@
 
 #ifdef CONFIG_KTSAN
 
-/**
+/*
  * ktsan_init_shadow() - Initializes KTSAN shadow at boot time.
  *
  * Allocate and initializes KTSAN metadata for early allocations.
  */
 void __init ktsan_init_shadow(void);
+
+/*
+ * ktsan_init_runtime() - Initializes KTSAN's state and enables KTSAN.
+ */
 void __init ktsan_init_runtime(void);
+
+/*
+ * ktsan_memblock_free_pages() - handles handover of memblock pages.
+ * @page:	struct page to free.
+ * @order:	order of @page.
+ *
+ * Freed pages are either handed over to buddy allocator or held back
+ * to be used as metadata.
+ */
 bool __init __must_check ktsan_memblock_free_pages(struct page *page,
 				      unsigned int order);
 
 extern bool ktsan_enabled;
 extern int panic_on_ktsan;
 
-// TODO - fix the text
 /*
  * KTSAN performs a lot of consistency checks that are currently enabled by
  * default. BUG_ON is normally discouraged in the kernel, unless used for
- * debugging, but KMSAN itself is a debugging tool, so it makes little sense to
+ * debugging, but KTSAN itself is a debugging tool, so it makes little sense to
  * recover if something goes wrong.
  */
 #define KTSAN_WARN_ON(cond)                                           \

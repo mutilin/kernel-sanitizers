@@ -3,6 +3,22 @@ config HAVE_ARCH_KTSAN
 
 config KTSAN
 	bool "ThreadSanitizer: dynamic data race error detector"
-    depends on HAVE_ARCH_KTSAN
-    depends on !KCSAN && !KMSAN && !KASAN
-    default n
+	depends on HAVE_ARCH_KTSAN
+	depends on !KASAN && !KCSAN && !KMSAN
+	help
+	  Enables ThreadSanitizer, a dynamic data race detector for the
+	  kernel. Requires compiler support for -fsanitize=thread.
+
+	  Reserves four shadow pages per page of kernel memory, so roughly
+	  80% of system RAM is consumed by metadata. Substantially slows
+	  the kernel down. For debugging only.
+
+config KTSAN_DEBUG
+	bool "Debug boot-time accounting for KTSAN"
+	depends on KTSAN
+	help
+	  Enables page accounting for the memblock handover, with a
+	  consistency check reported at the end of boot.
+
+	  Costs a small amount of __initdata and a few printk lines at
+	  boot. Say N unless you are working on KTSAN itself.

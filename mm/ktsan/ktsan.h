@@ -54,3 +54,4 @@ void __init ktsan_setup_meta(struct page *page, struct page **shadow,
 			     unsigned int order);
 
 #endif /* __X86_MM_KTSAN_KTSAN_H */
+

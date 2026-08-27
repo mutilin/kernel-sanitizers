@@ -112,14 +112,14 @@ void *ktsan_get_shadow(void *address)
 	return shadow_ptr_for(page) + off;
 }
 
-/* Allocate metadata for pages allocated at boot time. */
-void __init ktsan_init_alloc_meta_for_range(void *start, void *end)
+/* Allocates metadata for pages allocated at boot time. 
+ * 
+ * Adapted from KMSAN's eager shadow memory allocation, but allocates
+ * 4 shadow pages as metadata per 1 page instead of having 1 shadow page 
+ * and 1 origin page. 
+ */
+void __init ktsan_init_alloc_meta_for_range(void *start, void *end) 
 {
-	#ifdef DEBUG_KTSAN
-	static unsigned long __init kt_shadow_pages_allocated = 0;
-	static unsigned long __init kt_shadow_pages_assigned = 0;
-	#endif
-
 	struct page *shadow_p;
 	void *shadow;
 	struct page *page;
@@ -138,12 +138,16 @@ void __init ktsan_init_alloc_meta_for_range(void *start, void *end)
 			set_no_shadow_page(shadow_p);
 		shadow_page_for(page) = shadow_p;
 		
-		#ifdef DEBUG_KTSAN
-		kt_shadow_pages_assigned++;
-		#endif
 	}
 }
 
+/*
+ * Links the metadata with the corresponding block.
+ *
+ * Adapted from KMSAN's eager shadow memory allocation, but allocates
+ * 4 shadow pages as metadata per 1 page instead of having 1 shadow page 
+ * and 1 origin page. 
+ */
 void ktsan_setup_meta(struct page *page, struct page **shadow, unsigned int order)
 {
 	const unsigned long nr_pages = 1UL << order;
@@ -162,3 +166,4 @@ void ktsan_setup_meta(struct page *page, struct page **shadow, unsigned int orde
 		shadow_page_for(&page[i]) = run;
 	}
 }
+

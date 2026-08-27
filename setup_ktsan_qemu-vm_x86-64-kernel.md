@@ -40,6 +40,8 @@ You can also specify a compiler by adding `LLVM=1` in each `make` (by default GC
 ./scripts/config --enable KTSAN
 ./scripts/config --enable CONFIG_CONFIGFS_FS
 ./scripts/config --enable CONFIG_SECURITYFS
+
+./scripts/config --enable KTSAN_DEBUG
 ```
 Or
 
