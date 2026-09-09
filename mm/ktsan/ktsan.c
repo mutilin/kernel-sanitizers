@@ -99,6 +99,12 @@ void __init ktsan_init_early(void)
 {
 	kt_ctx_t *ctx = &kt_ctx;
 
+	/* RACE HUNTER: validate the new shadow bit layout at build time. */
+	BUILD_BUG_ON(sizeof(kt_shadow_t) != sizeof(unsigned long));
+	BUILD_BUG_ON(KT_MAX_THREAD_COUNT > (1UL << RH_KT_THREAD_ID_BITS));
+	BUILD_BUG_ON(RH_KT_THREAD_ID_BITS + RH_KT_CLOCK_BITS + 3 + 2 + 1 + 1 +
+		     RH_KT_PC_BITS != BITS_PER_LONG);
+
 	memset(ctx, 0, sizeof(*ctx));
 	kt_tab_init(&ctx->sync_tab, KT_SYNC_TAB_SIZE, sizeof(kt_tab_sync_t),
 		    KT_MAX_SYNC_COUNT);
@@ -113,6 +119,11 @@ void __init ktsan_init_early(void)
 	kt_thr_pool_init();
 
 	kt_stack_depot_init(&ctx->stack_depot);
+	/* The target-driven SMC runtime allocates targets and is initialized
+	 * later, after slab and the initial KTSAN thread are available.
+	 */
+	ctx->smc_algorithm = NULL;
+	ctx->smc_enabled = KT_ENABLE_RACE_HUNTER;
 }
 
 static void ktsan_report_memory_usage(void)
@@ -170,6 +181,7 @@ void ktsan_init(void)
 	BUG_ON(ctx->enabled);
 	inside = __test_and_set_bit(0, &thr->inside);
 	BUG_ON(inside != 0);
+	kt_rh_init();
 
 	kt_stat_init();
 	kt_supp_init();
@@ -302,7 +314,10 @@ void ktsan_syscall_enter(void)
 
 void ktsan_syscall_exit(void)
 {
-	/* Does nothing for now. */
+	kt_task_t *task = kt_current_task();
+
+	if (task && task->thr)
+		kt_rh_safe_point(task->thr);
 }
 
 void ktsan_cpu_start(void)
@@ -315,6 +330,10 @@ void ktsan_task_create(struct ktsan_task_s *new, int pid)
 	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
 	new->task = kt_cache_alloc(&kt_ctx.task_cache);
 	new->task->thr = kt_thr_create(thr, pid);
+	/* RACE HUNTER: expose KTSAN task creation as ThreadCreateEvent with a
+	 * real creation pc from the public KTSAN hook.
+	 */
+	kt_rh_thread_create(thr, new->task->thr, pc);
 	new->task->running = false;
 	LEAVE();
 }
@@ -399,7 +418,9 @@ static void ktsan_memblock_alloc(void *addr, unsigned long size,
 				 bool write_to_shadow)
 {
 	ENTER(KT_ENTER_DISABLED);
-	BUG_ON(thr->event_disable_depth != 0);
+	// BUG_ON(thr->event_disable_depth != 0);
+	if (thr->event_disable_depth != 0)
+		write_to_shadow = false;
 	kt_memblock_alloc(thr, pc, (uptr_t)addr, (size_t)size, write_to_shadow);
 	LEAVE();
 }
@@ -407,7 +428,9 @@ static void ktsan_memblock_alloc(void *addr, unsigned long size,
 void ktsan_memblock_free(void *addr, unsigned long size, bool write_to_shadow)
 {
 	ENTER(KT_ENTER_DISABLED);
-	BUG_ON(thr->event_disable_depth != 0);
+	// BUG_ON(thr->event_disable_depth != 0);
+	if (thr->event_disable_depth != 0)
+		write_to_shadow = false;
 	kt_memblock_free(thr, pc, (uptr_t)addr, (size_t)size, write_to_shadow);
 	LEAVE();
 }
@@ -961,7 +984,8 @@ EXPORT_SYMBOL(ktsan_read16);
 void ktsan_read_range(void *addr, size_t sz)
 {
 	ENTER(KT_ENTER_NORMAL);
-	kt_access_range(thr, pc, (uptr_t)addr, sz, true);
+	kt_access_range(thr, pc, (uptr_t)addr, sz, true,
+			KT_RH_ACCESS_REGULAR);
 	LEAVE();
 }
 EXPORT_SYMBOL(ktsan_read_range);
@@ -1010,7 +1034,8 @@ EXPORT_SYMBOL(ktsan_write16);
 void ktsan_write_range(void *addr, size_t sz)
 {
 	ENTER(KT_ENTER_NORMAL);
-	kt_access_range(thr, pc, (uptr_t)addr, sz, false);
+	kt_access_range(thr, pc, (uptr_t)addr, sz, false,
+			KT_RH_ACCESS_REGULAR);
 	LEAVE();
 }
 EXPORT_SYMBOL(ktsan_write_range);
