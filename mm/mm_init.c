@@ -2720,6 +2720,7 @@ void __init mm_core_init(void)
 	report_meminit();
 	kmsan_init_shadow();
 	ktsan_init_shadow();
+	ktsan_init_early();
 	stack_depot_early_init();
 
 	/*

@@ -8,6 +8,36 @@
 #include "../internal.h"
 #include "ktsan.h"
 
+
+bool ktsan_enabled __read_mostly;
+int panic_on_ktsan __read_mostly;
+
+kt_ctx_t kt_ctx;
+
+/*
+ * Reserves physical memory for large bootmem allocations
+ */
+void __init ktsan_init_early(void)
+{
+	kt_ctx_t *ctx = &kt_ctx;
+
+	memset(ctx, 0, sizeof(*ctx));
+	kt_tab_init(&ctx->sync_tab, KT_SYNC_TAB_SIZE, sizeof(kt_tab_sync_t),
+		    KT_MAX_SYNC_COUNT);
+	kt_tab_init(&ctx->memblock_tab, KT_MEMBLOCK_TAB_SIZE,
+		    sizeof(kt_tab_memblock_t), KT_MAX_MEMBLOCK_COUNT);
+	kt_tab_init(&ctx->test_tab, 13, sizeof(kt_tab_test_t), 20);
+
+	kt_cache_init(&ctx->percpu_sync_cache, sizeof(kt_percpu_sync_t),
+		      KT_MAX_PERCPU_SYNC_COUNT);
+	kt_cache_init(&ctx->task_cache, sizeof(kt_task_t), KT_MAX_TASK_COUNT);
+
+	kt_thr_pool_init();
+
+	kt_stack_depot_init(&ctx->stack_depot);
+}
+
+
 #define NUM_FUTURE_RANGES 128
 struct start_end_pair {
 	u64 start, end;
@@ -15,9 +45,6 @@ struct start_end_pair {
 
 static struct start_end_pair start_end_pairs[NUM_FUTURE_RANGES] __initdata;
 static int future_index __initdata;
-
-bool ktsan_enabled __read_mostly;
-int panic_on_ktsan __read_mostly;
 
 #ifdef CONFIG_KTSAN_DEBUG
 static unsigned long kt_in, kt_freed, kt_shadow, kt_dropped __initdata;

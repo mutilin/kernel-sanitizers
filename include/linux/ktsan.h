@@ -9,16 +9,19 @@
 #ifdef CONFIG_KTSAN
 
 /*
+ * ktsan_init_early() - Initializes structures:
+ *
+ *
+ *
+ */
+void __init ktsan_init_early(void);
+
+/*
  * ktsan_init_shadow() - Initializes KTSAN shadow at boot time.
  *
  * Allocate and initializes KTSAN metadata for early allocations.
  */
 void __init ktsan_init_shadow(void);
-
-/*
- * ktsan_init_runtime() - Initializes KTSAN's state and enables KTSAN.
- */
-void __init ktsan_init_runtime(void);
 
 /*
  * ktsan_memblock_free_pages() - handles handover of memblock pages.
@@ -30,6 +33,11 @@ void __init ktsan_init_runtime(void);
  */
 bool __init __must_check ktsan_memblock_free_pages(struct page *page,
 				      unsigned int order);
+
+/*
+ * ktsan_init_runtime() - Initializes KTSAN's state and enables KTSAN.
+ */
+void __init ktsan_init_runtime(void);
 
 extern bool ktsan_enabled;
 extern int panic_on_ktsan;
@@ -56,11 +64,11 @@ extern int panic_on_ktsan;
 
 #else /* CONFIG_KTSAN */
 
-static inline void ktsan_init_shadow(void) 
+static inline void ktsan_init_early(void)
 {
 }
 
-static inline void ktsan_init_runtime(void)
+static inline void ktsan_init_shadow(void) 
 {
 }
  
@@ -69,7 +77,11 @@ static inline bool ktsan_memblock_free_pages(struct page *page,
 {
 	return true;
 }
- 
+
+static inline void ktsan_init_runtime(void)
+{
+}
+
 #define KTSAN_WARN_ON WARN_ON
 
 #endif /* CONFIG_KTSAN */
