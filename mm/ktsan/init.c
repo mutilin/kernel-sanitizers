@@ -49,6 +49,7 @@ static int future_index __initdata;
 #ifdef CONFIG_KTSAN_DEBUG
 static unsigned long kt_in, kt_freed, kt_shadow, kt_dropped __initdata;
 static unsigned long kt_disc_freed, kt_disc_shadow __initdata;
+static unsigned long held = 0;
 #endif
 
 /*
@@ -272,16 +273,12 @@ static void ktsan_memblock_discard(void)
 	 */
 	collect.order = MAX_PAGE_ORDER;
 	struct metadata_blocks *hb;
-	
-	#ifdef CONFIG_KTSAN_DEBUG
-	unsigned long held = 0;
-	#endif
-	
+		
 	int i, j;
 
-	for (i = MAX_PAGE_ORDER; i >= 0; i--) {
+	for (i = MAX_PAGE_ORDER; i >= KT_SHADOW_SLOTS_LOG; i--) {
 		#ifdef CONFIG_KTSAN_DEBUG
-		held += (unsigned long)held_back->count << i;
+		held += (unsigned long)held_back[i].count << i;
 		#endif
 		hb = &held_back[i];
 		for (j = 0; j < hb->count; j++) {
@@ -290,24 +287,80 @@ static void ktsan_memblock_discard(void)
 		}
 		hb->count = 0;
 		do_collection();
-		collect_split();
+		if (i > KT_SHADOW_SLOTS_LOG)
+			collect_split();
 	}
+	kt_dropped += (unsigned long)collect.index << collect.order;
 
 	#ifdef CONFIG_KTSAN_DEBUG
 	pr_info("KTSAN: in=%lu freed=%lu shadow=%lu dropped=%lu\n", 
 		kt_in, kt_disc_freed + kt_freed, kt_shadow + kt_disc_shadow, kt_dropped);
 	pr_info("KTSAN: held=%lu balance=%ld ratio=%lu.%03lu\n", 
 		held, (long)(kt_in - (kt_freed + kt_disc_freed + kt_shadow +
-			kt_disc_shadow + kt_dropped + held)),
+			kt_disc_shadow + kt_dropped)),
 		kt_in / (kt_freed + kt_disc_freed),
 		(kt_in % (kt_freed + kt_disc_freed)) * 1000 /
 			(kt_freed + kt_disc_freed));
 	#endif
 }
 
+static void __init ktsan_report_memory_usage(void) 
+{
+	unsigned long usable_in_pages	= kt_disc_freed + kt_freed;
+	unsigned long shadow_in_pages	= kt_shadow + kt_disc_shadow;
+	unsigned long pools_in_byte	= KT_MAX_SYNC_COUNT * sizeof(kt_tab_sync_t) + 
+				KT_MAX_MEMBLOCK_COUNT * sizeof(kt_tab_memblock_t) +
+				KT_MAX_PERCPU_SYNC_COUNT * sizeof(kt_percpu_sync_t) + 
+				KT_MAX_TASK_COUNT * sizeof(kt_task_t) +
+				20 * sizeof(kt_tab_test_t) + 
+				KT_MAX_THREAD_COUNT * sizeof(kt_thr_t) +
+				KT_STACK_DEPOT_MEMORY_LIMIT;
+	unsigned long dropped_in_pages	= kt_dropped;
+
+	pr_info("KTSAN: for use %lu MB, shadow %lu MB (1:4), pools %lu MB, dropped %lu KB \n", 
+		usable_in_pages >> 8, shadow_in_pages >> 8, 
+		pools_in_byte >> 20, dropped_in_pages << 2);
+}
+
+static void __init ktsan_report_memory_usage_detailed(void) 
+{
+	unsigned long usable_in_pages	= kt_disc_freed + kt_freed;
+	unsigned long shadow_in_pages	= kt_shadow + kt_disc_shadow;
+	unsigned long pools_in_byte	= KT_MAX_SYNC_COUNT * sizeof(kt_tab_sync_t) + 
+				KT_MAX_MEMBLOCK_COUNT * sizeof(kt_tab_memblock_t) +
+				KT_MAX_PERCPU_SYNC_COUNT * sizeof(kt_percpu_sync_t) + 
+				KT_MAX_TASK_COUNT * sizeof(kt_task_t) +
+				20 * sizeof(kt_tab_test_t) + 
+				KT_MAX_THREAD_COUNT * sizeof(kt_thr_t) +
+				KT_STACK_DEPOT_MEMORY_LIMIT;
+	unsigned long dropped_in_pages	= kt_dropped;
+
+	pr_info("KTSAN: for use %lu MB, shadow %lu MB (1:4), pools %lu MB, dropped %lu KB \n", 
+		usable_in_pages >> 8, shadow_in_pages >> 8, 
+		pools_in_byte >> 20, dropped_in_pages << 2);
+
+	pr_info("KTSAN: handover total in: %10lu pages \n", kt_in);
+	pr_info("KTSAN:             freed: %10lu pages \n", kt_disc_freed + kt_freed);
+	pr_info("KTSAN:            shadow: %10lu pages \n", kt_shadow + kt_disc_shadow);
+	pr_info("KTSAN:             ratio: %6lu.%03lu \n", kt_in / (kt_freed + kt_disc_freed),
+							(kt_in % (kt_freed + kt_disc_freed)) * 1000 
+							/ (kt_freed + kt_disc_freed));
+	pr_info("KTSAN:           dropped: %10lu pages \n", kt_dropped);
+	pr_info("KTSAN:      in held_back: %10lu pages \n", held);
+	pr_info("KTSAN:           balance: %10lu pages \n", (long)(kt_in - (kt_freed + 
+							kt_disc_freed + kt_shadow +
+							kt_disc_shadow + kt_dropped)));
+}
+
 void __init ktsan_init_runtime(void)
 {
 	ktsan_memblock_discard();
+	
+	if (IS_ENABLED(CONFIG_KTSAN_DEBUG))
+		ktsan_report_memory_usage_detailed();
+	else 
+		ktsan_report_memory_usage();
+
 	pr_info("Starting KernelThreadSanitizer\n");
 	pr_info("ATTENTION: KTSAN is a debugging tool, not for production use\n");
 	ktsan_enabled = true;

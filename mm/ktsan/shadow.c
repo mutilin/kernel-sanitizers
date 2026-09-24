@@ -135,7 +135,7 @@ void __init ktsan_init_alloc_meta_for_range(void *start, void *end)
 			continue; // TODO: why can be skipped 
 		shadow_p = virt_to_page((char *)shadow + addr * KT_SHADOW_RATIO);
 		for (int i = 0; i < KT_SHADOW_RATIO; i++)
-			set_no_shadow_page(shadow_p);
+			set_no_shadow_page(&shadow_p[i]);
 		shadow_page_for(page) = shadow_p;
 		
 	}

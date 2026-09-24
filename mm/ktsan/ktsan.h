@@ -44,7 +44,7 @@
 #define KT_TRACE_SIZE (KT_TRACE_PARTS * KT_TRACE_PART_SIZE)
 
 
-#if CONFIG_KTSAN_DEBUG
+#ifdef CONFIG_KTSAN_DEBUG
 #define KT_BUG_ON(x) BUG_ON(x)
 #else
 #define KT_BUG_ON(x)                                                           \
@@ -143,7 +143,7 @@ enum kt_event_type_e {
 	kt_event_runlock,
 	kt_event_interrupt,
 	kt_event_downgrade,
-#if CONFIG_KTSAN_DEBUG
+#ifdef CONFIG_KTSAN_DEBUG
 	kt_event_acquire,
 	kt_event_release,
 	kt_event_nonmat_acquire,
@@ -302,7 +302,7 @@ struct kt_thr_s {
 	/* Ignore of all seqcount-related events. */
 	int seqcount_ignore;
 	int interrupt_depth;
-#if CONFIG_KTSAN_DEBUG
+#ifdef CONFIG_KTSAN_DEBUG
 	kt_time_t last_event_disable_time;
 	kt_time_t last_event_enable_time;
 #endif
@@ -475,7 +475,7 @@ static __always_inline u32 kt_stack_pop(kt_stack_t *stack)
 void kt_stack_copy(kt_stack_t *dst, kt_stack_t *src);
 void kt_stack_print(kt_stack_t *stack, uptr_t top_pc);
 
-#if CONFIG_KTSAN_DEBUG
+#ifdef CONFIG_KTSAN_DEBUG
 void kt_stack_print_current(unsigned long strip_addr);
 void kt_stack_save_current(kt_stack_t *stack, unsigned long strip_addr);
 #endif
