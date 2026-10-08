@@ -12,6 +12,7 @@
 #include <linux/highmem.h>
 #include <linux/hrtimer_api.h>
 #include <linux/ktime_api.h>
+#include <linux/ktsan.h>
 #include <linux/sched/signal.h>
 #include <linux/syscalls_api.h>
 #include <linux/debug_locks.h>
@@ -5281,6 +5282,9 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 		 */
 		sched_ext_dead(prev);
 		cgroup_task_dead(prev);
+
+		/* Release the KTSAN thread so that its slot can be reused. */
+		ktsan_task_destroy(prev);
 
 		/* Task is done with its stack. */
 		put_task_stack(prev);

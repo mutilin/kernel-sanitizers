@@ -4,6 +4,7 @@
 #include <linux/mm.h>
 #include <linux/memblock.h>
 #include <linux/ktsan.h>
+#include <linux/percpu.h>
 
 #include "../internal.h"
 #include "ktsan.h"
@@ -49,6 +50,8 @@ static int future_index __initdata;
 #ifdef CONFIG_KTSAN_DEBUG
 static unsigned long kt_in, kt_freed, kt_shadow, kt_dropped __initdata;
 static unsigned long kt_disc_freed, kt_disc_shadow __initdata;
+/* kt_dropped split: unaligned range edges / discard leftovers. */
+static unsigned long kt_dropped_edge, kt_dropped_left __initdata;
 static unsigned long held = 0;
 #endif
 
@@ -164,6 +167,7 @@ bool __init ktsan_memblock_free_pages(struct page *page, unsigned int order)
 	if (order < KT_SHADOW_SLOTS_LOG) {
 		#ifdef CONFIG_KTSAN_DEBUG
 		kt_dropped += 1UL << order;
+		kt_dropped_edge += 1UL << order;
 		#endif
 		return false;
 	}
@@ -291,6 +295,7 @@ static void ktsan_memblock_discard(void)
 			collect_split();
 	}
 	kt_dropped += (unsigned long)collect.index << collect.order;
+	kt_dropped_left += (unsigned long)collect.index << collect.order;
 
 	#ifdef CONFIG_KTSAN_DEBUG
 	pr_info("KTSAN: in=%lu freed=%lu shadow=%lu dropped=%lu\n", 
@@ -346,22 +351,109 @@ static void __init ktsan_report_memory_usage_detailed(void)
 							(kt_in % (kt_freed + kt_disc_freed)) * 1000 
 							/ (kt_freed + kt_disc_freed));
 	pr_info("KTSAN:           dropped: %10lu pages \n", kt_dropped);
+	pr_info("KTSAN:     (range edges): %10lu pages \n", kt_dropped_edge);
+	pr_info("KTSAN:    (discard left): %10lu pages \n", kt_dropped_left);
 	pr_info("KTSAN:      in held_back: %10lu pages \n", held);
 	pr_info("KTSAN:           balance: %10lu pages \n", (long)(kt_in - (kt_freed + 
 							kt_disc_freed + kt_shadow +
 							kt_disc_shadow + kt_dropped)));
 }
 
+static kt_task_t *kt_task_create(kt_thr_t *parent, struct task_struct *p)
+{
+	kt_task_t *t = kt_cache_alloc(&kt_ctx.task_cache);
+
+	if (unlikely(!t))
+		return NULL;
+	t->thr = kt_thr_create(parent, p->pid);	/* pid 0 -> fake negative */
+	if (unlikely(!t->thr)) {
+		kt_cache_free(&kt_ctx.task_cache, t);
+		return NULL;
+	}
+	t->running = false;
+	return t;
+}
+
+/*
+ * Task 0 (init_task) is current here. It has no parent thread, so its thread
+ * starts with a zero clock; every later task inherits its parent's clock in
+ * ktsan_task_create().
+ */
+static void __init ktsan_init_task_zero(void)
+{
+	kt_ctx_t *ctx = &kt_ctx;
+	kt_task_t *task;
+
+	/* Zeroed: no thread runs on any CPU yet. */
+	ctx->cpus = alloc_percpu(kt_cpu_t);
+	if (!ctx->cpus)
+		panic("ktsan: cannot allocate per-cpu state\n");
+
+	task = kt_task_create(NULL, current);
+	if (!task)
+		panic("ktsan: cannot create thread for task 0\n");
+	current->ktsan.task = task;
+}
+
 void __init ktsan_init_runtime(void)
 {
 	ktsan_memblock_discard();
-	
+
 	if (IS_ENABLED(CONFIG_KTSAN_DEBUG))
 		ktsan_report_memory_usage_detailed();
-	else 
+	else
 		ktsan_report_memory_usage();
+
+	ktsan_init_task_zero();
 
 	pr_info("Starting KernelThreadSanitizer\n");
 	pr_info("ATTENTION: KTSAN is a debugging tool, not for production use\n");
 	ktsan_enabled = true;
+}
+
+void ktsan_task_create(struct task_struct *p)
+{
+	/*
+	 * dup_task_struct() copied the parent's pointer; never let the child
+	 * share it, even if the event is ignored below.
+	 */
+	p->ktsan.task = NULL;
+
+	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
+	p->ktsan.task = kt_task_create(thr, p);
+	LEAVE();
+}
+
+void ktsan_task_destroy(struct task_struct *p)
+{
+	kt_task_t *old = p->ktsan.task;
+
+	if (!old)
+		return;
+
+	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
+	KT_BUG_ON(old->running);
+	kt_thr_destroy(thr, old->thr);
+	old->thr = NULL;
+	kt_cache_free(&kt_ctx.task_cache, old);
+	p->ktsan.task = NULL;
+	LEAVE();
+}
+
+void ktsan_task_start(void)
+{
+	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
+	KT_BUG_ON(task->running);
+	kt_thr_start(thr, pc);
+	task->running = true;
+	LEAVE();
+}
+
+void ktsan_task_stop(void)
+{
+	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
+	KT_BUG_ON(!task->running);
+	kt_thr_stop(thr, pc);
+	task->running = false;
+	LEAVE();
 }

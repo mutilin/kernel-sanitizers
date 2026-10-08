@@ -22,6 +22,7 @@
 #include <linux/sem_types.h>
 #include <linux/shm.h>
 #include <linux/kmsan_types.h>
+#include <linux/ktsan_types.h>
 #include <linux/mutex_types.h>
 #include <linux/plist_types.h>
 #include <linux/hrtimer_types.h>
@@ -1469,6 +1470,10 @@ struct task_struct {
 
 #ifdef CONFIG_KMSAN
 	struct kmsan_ctx		kmsan_ctx;
+#endif
+
+#ifdef CONFIG_KTSAN
+	struct ktsan_task_s		ktsan;
 #endif
 
 #if IS_ENABLED(CONFIG_KUNIT)

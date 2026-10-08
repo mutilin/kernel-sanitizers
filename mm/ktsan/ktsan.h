@@ -7,6 +7,10 @@
 #include <linux/kernel.h>
 #include <linux/mm_types.h>
 #include <linux/types.h>
+#include <linux/hardirq.h>
+#include <linux/irqflags.h>
+#include <linux/preempt.h>
+#include <linux/sched.h>
 
 #define KT_GRAIN 8
 #define KT_SHADOW_SLOTS_LOG 2
@@ -412,6 +416,83 @@ struct kt_ctx_s {
 };
 
 extern kt_ctx_t kt_ctx;
+
+/* Runtime entry/exit. */
+
+static inline kt_task_t *kt_current_task(void)
+{
+	return current->ktsan.task;
+}
+
+/* Nothing special. */
+#define KT_ENTER_NORMAL 0
+/* Handle events that come from the scheduler internals. */
+#define KT_ENTER_SCHED (1 << 0)
+/* Handle events even if events were disabled with ktsan_disable(). */
+#define KT_ENTER_DISABLED (1 << 1)
+
+/*
+ * ENTER()/LEAVE() bracket every runtime entry point. Inside, @thr is the
+ * current KTSAN thread and @pc the caller's return address. If the event
+ * must be ignored (KTSAN disabled, NMI, untracked task, recursion into the
+ * runtime), control jumps straight to the exit label in LEAVE().
+ *
+ * Adapted from the reference KTSAN, minus stop_nmi()/restart_nmi() which no
+ * longer exist; NMIs are ignored via in_nmi() instead. Preemption is
+ * re-enabled without rescheduling, so that calls made from the scheduler
+ * (ktsan_task_start/stop/destroy) can't recurse into schedule().
+ */
+#define ENTER(enter_flags)                                                     \
+	kt_task_t *task;                                                       \
+	kt_thr_t *thr;                                                         \
+	uptr_t pc;                                                             \
+	unsigned long kt_flags;                                                \
+	bool event_handled;                                                    \
+                                                                               \
+	thr = NULL;                                                            \
+	event_handled = false;                                                 \
+                                                                               \
+	preempt_disable();                                                     \
+	kt_flags = arch_local_irq_save();                                      \
+                                                                               \
+	if (unlikely(!READ_ONCE(ktsan_enabled)))                               \
+		goto exit;                                                     \
+                                                                               \
+	/* Ignore NMIs for now. */                                             \
+	if (unlikely(in_nmi()))                                                \
+		goto exit;                                                     \
+                                                                               \
+	task = kt_current_task();                                              \
+	if (unlikely(!task))                                                   \
+		goto exit;                                                     \
+                                                                               \
+	if (unlikely(!task->running && !((enter_flags) & KT_ENTER_SCHED)))     \
+		goto exit;                                                     \
+                                                                               \
+	thr = task->thr;                                                       \
+	KT_BUG_ON(!thr);                                                       \
+                                                                               \
+	if (unlikely(thr->event_disable_depth != 0 &&                          \
+		     !((enter_flags) & KT_ENTER_DISABLED)))                    \
+		goto exit;                                                     \
+                                                                               \
+	if (unlikely(__test_and_set_bit(0, &thr->inside)))                     \
+		goto exit;                                                     \
+                                                                               \
+	pc = (uptr_t)_RET_IP_;                                                 \
+	event_handled = true;                                                  \
+	/**/
+
+#define LEAVE()                                                                \
+	KT_BUG_ON(task != kt_current_task());                                  \
+	if (unlikely(!__test_and_clear_bit(0, &thr->inside)))                  \
+		KT_BUG_ON(1);                                                  \
+                                                                               \
+exit:                                                                          \
+	KT_BUG_ON(thr && event_handled && thr->inside);                        \
+	arch_local_irq_restore(kt_flags);                                      \
+	preempt_enable_no_resched();                                           \
+	/**/
 
 /* Statistics. Enabled only when KT_ENABLE_STATS = 1. */
 

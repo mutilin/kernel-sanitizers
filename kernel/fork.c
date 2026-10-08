@@ -38,6 +38,7 @@
 #include <linux/iocontext.h>
 #include <linux/key.h>
 #include <linux/kmsan.h>
+#include <linux/ktsan.h>
 #include <linux/binfmts.h>
 #include <linux/mman.h>
 #include <linux/mmu_notifier.h>
@@ -2530,6 +2531,12 @@ __latent_entropy struct task_struct *copy_process(
 	user_events_fork(p, clone_flags);
 
 	copy_oom_score_adj(clone_flags, p);
+
+	/*
+	 * After the last failure point, before the task can run: covers
+	 * kernel_clone(), fork_idle() and create_io_thread().
+	 */
+	ktsan_task_create(p);
 
 	return p;
 
