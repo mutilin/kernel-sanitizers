@@ -34,6 +34,7 @@
 #include <linux/oom.h>
 #include <linux/numa.h>
 #include <linux/page_owner.h>
+#include <linux/ktsan.h>
 #include <linux/sched/sysctl.h>
 #include <linux/memory-tiers.h>
 #include <linux/compat.h>
@@ -3774,6 +3775,7 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 
 		folio_split_memcg_refs(folio, old_order, split_order);
 		split_page_owner(&folio->page, old_order, split_order);
+		ktsan_split_folio(&folio->page, old_order, split_order);
 		pgalloc_tag_split(folio, old_order, split_order);
 		__split_folio_to_order(folio, old_order, split_order);
 

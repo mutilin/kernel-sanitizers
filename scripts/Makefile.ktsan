@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0
+# Included from the top-level Makefile; the export makes CFLAGS_KTSAN visible
+# to the sub-makes that apply it in scripts/Makefile.lib.
+#
+# -fno-optimize-sibling-calls: a tail call would leave the caller's frame
+#  without its __tsan_func_exit() pairing, and the shadow stack would drift.
+# tsan-distinguish-volatile: READ_ONCE()/WRITE_ONCE() are volatile accesses;
+#  report them as __tsan_volatile_*() so they can be treated as atomic.
+# tsan-compound-read-before-write: one __tsan_read_write*() call for x++ and
+#  friends instead of a read and a write.
+ktsan-cflags := -fsanitize=thread -fno-optimize-sibling-calls \
+	-mllvm -tsan-distinguish-volatile=1 \
+	-mllvm -tsan-compound-read-before-write=1
+
+export CFLAGS_KTSAN := $(ktsan-cflags)

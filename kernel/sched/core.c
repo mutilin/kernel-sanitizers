@@ -5313,6 +5313,11 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 
 	finish_task_switch(prev);
 	/*
+	 * First run of a new task. Start it while preemption is still
+	 * disabled, so that a preemption can't stop a not yet started task.
+	 */
+	ktsan_task_start();
+	/*
 	 * This is a special case: the newly created task has just
 	 * switched the context for the first time. It is returning from
 	 * schedule for the first time in this path.
@@ -7040,6 +7045,9 @@ static void __sched notrace __schedule(int sched_mode)
 	rq = cpu_rq(cpu);
 	prev = rq->curr;
 
+	/* prev leaves the CPU; the task that resumes starts at the end. */
+	ktsan_task_stop();
+
 	schedule_debug(prev, preempt);
 
 	klp_sched_try_switch(prev);
@@ -7197,6 +7205,8 @@ keep_resched:
 		hrtick_schedule_exit(rq);
 		raw_spin_rq_unlock_irq(rq);
 	}
+	/* current is the task that resumes here, see ktsan_task_stop() above. */
+	ktsan_task_start();
 	trace_sched_exit_tp(is_switch);
 }
 

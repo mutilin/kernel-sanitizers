@@ -14,6 +14,7 @@ KCOV_INSTRUMENT := n
 # Disable KCSAN to avoid excessive noise and performance degradation. To avoid
 # false positives ensure barriers implied by sched functions are instrumented.
 KCSAN_SANITIZE := n
+KTSAN_SANITIZE := n
 KCSAN_INSTRUMENT_BARRIERS := y
 
 ifneq ($(CONFIG_SCHED_OMIT_FRAME_POINTER),y)

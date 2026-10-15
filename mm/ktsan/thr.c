@@ -160,3 +160,97 @@ void kt_thr_stop(kt_thr_t *thr, uptr_t pc)
 	thr->cpu = NULL;
 }
 
+/*
+ * An interrupt runs as the interrupted thread, but must not inherit what that
+ * thread is in the middle of (held locks, pending acquire/release, disabled
+ * reads, ...). Stash that state in @state and start the interrupt clean.
+ */
+void kt_thr_interrupt(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
+{
+	KT_BUG_ON(state->thr != NULL);
+	state->thr = thr;
+
+	KT_BUG_ON(thr->event_disable_depth);
+
+	/*
+	 * TODO: save and reset thr->stack (kt_stack_copy()) and add a
+	 * kt_event_interrupt to the trace once stack.c and trace.c are ported.
+	 */
+
+	state->mutexset = thr->mutexset;
+	thr->mutexset.size = 0;
+
+	state->acquire_active = thr->acquire_active;
+	if (thr->acquire_active) {
+		thr->acquire_active = 0;
+		state->acquire_clk = thr->acquire_clk;
+	}
+	state->release_active = thr->release_active;
+	if (thr->release_active) {
+		thr->release_active = 0;
+		state->release_clk = thr->release_clk;
+	}
+
+	state->read_disable_depth = thr->read_disable_depth;
+	thr->read_disable_depth = 0;
+	state->report_disable_depth = thr->report_disable_depth;
+	thr->report_disable_depth = 0;
+	state->preempt_disable_depth = thr->preempt_disable_depth;
+	thr->preempt_disable_depth = 0;
+
+	list_replace_init(&thr->percpu_list, &state->percpu_list);
+
+	memcpy(&state->seqcount, &thr->seqcount, sizeof(state->seqcount));
+	memcpy(&state->seqcount_pc, &thr->seqcount_pc,
+	       sizeof(state->seqcount_pc));
+	memset(&thr->seqcount, 0, sizeof(thr->seqcount));
+	memset(&thr->seqcount_pc, 0, sizeof(thr->seqcount_pc));
+	state->seqcount_ignore = thr->seqcount_ignore;
+	thr->seqcount_ignore = 0;
+}
+
+/* Returns to the interrupted thread the state saved by kt_thr_interrupt(). */
+void kt_thr_resume(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
+{
+	KT_BUG_ON(state->thr != thr);
+	state->thr = NULL;
+
+	KT_BUG_ON(thr->mutexset.size);
+	KT_BUG_ON(thr->event_disable_depth);
+	KT_BUG_ON(thr->read_disable_depth);
+	KT_BUG_ON(thr->report_disable_depth);
+	KT_BUG_ON(thr->preempt_disable_depth);
+	KT_BUG_ON(thr->seqcount[0]);
+	KT_BUG_ON(thr->seqcount_ignore);
+
+	/*
+	 * TODO: add a kt_event_interrupt to the trace and replay the saved
+	 * stack (kt_func_entry()) and mutexset (kt_event_lock/rlock) into it
+	 * once stack.c and trace.c are ported.
+	 */
+	thr->mutexset = state->mutexset;
+
+	thr->acquire_active = state->acquire_active;
+	if (thr->acquire_active)
+		thr->acquire_clk = state->acquire_clk;
+	thr->release_active = state->release_active;
+	if (thr->release_active)
+		thr->release_clk = state->release_clk;
+
+	thr->read_disable_depth = state->read_disable_depth;
+	thr->report_disable_depth = state->report_disable_depth;
+	thr->preempt_disable_depth = state->preempt_disable_depth;
+
+	/*
+	 * TODO: kt_percpu_release() of what the interrupt acquired, once
+	 * sync_percpu.c is ported. Until then the list stays empty.
+	 */
+	KT_BUG_ON(!list_empty(&thr->percpu_list));
+	list_replace_init(&state->percpu_list, &thr->percpu_list);
+
+	memcpy(&thr->seqcount, &state->seqcount, sizeof(thr->seqcount));
+	memcpy(&thr->seqcount_pc, &state->seqcount_pc,
+	       sizeof(thr->seqcount_pc));
+	thr->seqcount_ignore = state->seqcount_ignore;
+}
+

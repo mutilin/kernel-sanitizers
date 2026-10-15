@@ -7,6 +7,7 @@ KASAN_SANITIZE_slab_common.o := n
 KASAN_SANITIZE_slub.o := n
 KASAN_SANITIZE_kmemleak.o := n
 KCSAN_SANITIZE_kmemleak.o := n
+KTSAN_SANITIZE_kmemleak.o := n
 
 # These produce frequent data race reports: most of them are due to races on
 # the same word but accesses to different bits of that word. Re-enable KCSAN
@@ -16,6 +17,13 @@ KCSAN_SANITIZE_slub.o := n
 KCSAN_SANITIZE_page_alloc.o := n
 # But enable explicit instrumentation for memory barriers.
 KCSAN_INSTRUMENT_BARRIERS := y
+
+# SLUB keeps its freelist pointers inside free objects and the page allocator
+# its list heads inside free pages. KTSAN sees those blocks through the
+# ktsan_slab_*() and ktsan_*_page() hooks instead.
+KTSAN_SANITIZE_slab_common.o := n
+KTSAN_SANITIZE_slub.o := n
+KTSAN_SANITIZE_page_alloc.o := n
 
 # These files are disabled because they produce non-interesting and/or
 # flaky coverage that is not a function of syscall inputs. E.g. slab is out of

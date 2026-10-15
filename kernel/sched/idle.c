@@ -9,6 +9,7 @@
 #include <linux/cpuidle.h>
 #include <linux/suspend.h>
 #include <linux/livepatch.h>
+#include <linux/ktsan.h>
 #include "sched.h"
 #include "smp.h"
 
@@ -332,6 +333,11 @@ static void do_idle(void)
 		local_irq_disable();
 
 		if (cpu_is_offline(cpu)) {
+			/*
+			 * The idle task never returns from here; it is started
+			 * again by start_secondary() if the CPU comes back.
+			 */
+			ktsan_task_stop();
 			cpuhp_report_idle_dead();
 			arch_cpu_idle_dead();
 		}

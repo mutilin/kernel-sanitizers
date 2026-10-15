@@ -19,6 +19,7 @@
 #include <linux/efi.h>
 #include <linux/pgtable.h>
 #include <linux/kmsan.h>
+#include <linux/ktsan.h>
 
 #include <asm/set_memory.h>
 #include <asm/e820/api.h>
@@ -492,6 +493,8 @@ void iounmap(volatile void __iomem *addr)
 	}
 
 	kmsan_iounmap_page_range((unsigned long)addr,
+		(unsigned long)addr + get_vm_area_size(p));
+	ktsan_iounmap_page_range((unsigned long)addr,
 		(unsigned long)addr + get_vm_area_size(p));
 	memtype_free(p->phys_addr, p->phys_addr + get_vm_area_size(p));
 

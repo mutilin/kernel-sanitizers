@@ -90,6 +90,7 @@
 #include <asm/stackprotector.h>
 #include <asm/sev.h>
 #include <asm/spec-ctrl.h>
+#include <linux/ktsan.h>
 
 /* representing HT siblings of each logical CPU */
 DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_sibling_map);
@@ -273,6 +274,8 @@ static void notrace __noendbr start_secondary(void *unused)
 	cpuhp_ap_sync_alive();
 
 	cpu_init();
+	/* Bind this CPU's idle task (created by fork_idle()) to the CPU. */
+	ktsan_task_start();
 	fpu__init_cpu();
 	rcutree_report_cpu_starting(raw_smp_processor_id());
 	x86_cpuinit.early_percpu_clock_init();

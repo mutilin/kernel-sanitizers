@@ -16,6 +16,8 @@ KMSAN_SANITIZE_common.o := n
 
 # As above, instrumenting secondary CPU boot code causes boot hangs.
 KCSAN_SANITIZE_common.o := n
+KTSAN_SANITIZE_common.o := n
+KTSAN_SANITIZE_perf_event.o := n
 
 obj-y			:= cacheinfo.o scattered.o
 obj-y			+= topology_common.o topology_ext.o topology_amd.o

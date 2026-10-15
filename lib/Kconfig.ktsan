@@ -5,6 +5,8 @@ config KTSAN
 	bool "ThreadSanitizer: dynamic data race error detector"
 	depends on HAVE_ARCH_KTSAN
 	depends on !KASAN && !KCSAN && !KMSAN
+	# The instrumentation emits a module constructor calling __tsan_init().
+	select CONSTRUCTORS
 	help
 	  Enables ThreadSanitizer, a dynamic data race detector for the
 	  kernel. Requires compiler support for -fsanitize=thread.

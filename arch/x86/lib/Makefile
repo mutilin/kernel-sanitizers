@@ -8,6 +8,7 @@ KCOV_INSTRUMENT_delay.o	:= n
 
 # KCSAN uses udelay for introducing watchpoint delay; avoid recursion.
 KCSAN_SANITIZE_delay.o := n
+KTSAN_SANITIZE_delay.o := n
 ifdef CONFIG_KCSAN
 # In case KCSAN+lockdep+ftrace are enabled, disable ftrace for delay.o to avoid
 # lockdep -> [other libs] -> KCSAN -> udelay -> ftrace -> lockdep recursion.

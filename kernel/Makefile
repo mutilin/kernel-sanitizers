@@ -31,6 +31,7 @@ KCOV_INSTRUMENT_softirq.o := n
 # Avoid KCSAN instrumentation in softirq ("No shared variables, all the data
 # are CPU local" => assume no data races), to reduce overhead in interrupts.
 KCSAN_SANITIZE_softirq.o = n
+KTSAN_SANITIZE_softirq.o = n
 # These are called from save_stack_trace() on slub debug path,
 # and produce insane amounts of uninteresting coverage.
 KCOV_INSTRUMENT_extable.o := n
@@ -41,6 +42,7 @@ KCOV_INSTRUMENT_kcov.o := n
 # via printk, etc.
 KASAN_SANITIZE_kcov.o := n
 KCSAN_SANITIZE_kcov.o := n
+KTSAN_SANITIZE_kcov.o := n
 UBSAN_SANITIZE_kcov.o := n
 KMSAN_SANITIZE_kcov.o := n
 
@@ -147,6 +149,7 @@ CFLAGS_kstack_erase.o += $(call cc-option,-mgeneral-regs-only)
 obj-$(CONFIG_KSTACK_ERASE) += kstack_erase.o
 KASAN_SANITIZE_kstack_erase.o := n
 KCSAN_SANITIZE_kstack_erase.o := n
+KTSAN_SANITIZE_kstack_erase.o := n
 KCOV_INSTRUMENT_kstack_erase.o := n
 
 obj-$(CONFIG_SCF_TORTURE_TEST) += scftorture.o

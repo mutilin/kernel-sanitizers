@@ -2,10 +2,15 @@
 
 //#include <asm/ktsan.h>
 #include <asm/ktsan.h>
+#include <asm/tlbflush.h>
+#include <linux/cacheflush.h>
+#include <linux/log2.h>
 #include <linux/memblock.h>
 #include <linux/mm_types.h>
+#include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/stddef.h>
+#include <linux/vmalloc.h>
 
 #include "../internal.h"
 #include "ktsan.h"
@@ -35,23 +40,44 @@ static void set_no_shadow_page(struct page *page)
 static char dummy_load_page[PAGE_SIZE] __aligned(PAGE_SIZE);
 static char dummy_store_page[PAGE_SIZE] __aligned(PAGE_SIZE);
 
-/*static unsigned long vmalloc_meta(void *addr, bool is_origin)
-{
-	unsigned long addr64 = (unsigned long)addr, off;
+/*
+ * Shadow of pages that have none of their own (see
+ * ktsan_vmap_pages_range_noflush()). Shared by all of them, so its contents
+ * are meaningless, but the vmalloc shadow region must be mapped wherever the
+ * vmalloc area is.
+ */
+static char no_shadow_run[KT_SHADOW_RATIO * PAGE_SIZE] __aligned(PAGE_SIZE);
 
-	KMSAN_WARN_ON(is_origin && !IS_ALIGNED(addr64, KMSAN_ORIGIN_SIZE));
-	if (kmsan_internal_is_vmalloc_addr(addr)) {
-		off = addr64 - VMALLOC_START;
-		return off + (is_origin ? KMSAN_VMALLOC_ORIGIN_START :
-					  KMSAN_VMALLOC_SHADOW_START);
-	}
-	if (kmsan_internal_is_module_addr(addr)) {
-		off = addr64 - MODULES_VADDR;
-		return off + (is_origin ? KMSAN_MODULES_ORIGIN_START :
-					  KMSAN_MODULES_SHADOW_START);
-	}
+/*
+ * Non-instrumented versions of is_vmalloc_addr() and is_module_address(),
+ * adapted from KMSAN's kmsan_internal_is_vmalloc_addr() and
+ * kmsan_internal_is_module_addr().
+ */
+static inline bool kt_is_vmalloc_addr(u64 addr)
+{
+	return addr >= VMALLOC_START && addr < VMALLOC_END;
+}
+
+static inline bool kt_is_module_addr(u64 addr)
+{
+	return addr >= MODULES_VADDR && addr < MODULES_END;
+}
+
+/*
+ * Returns the address of the shadow of a vmalloc or module address in the
+ * shadow region (see arch/x86/include/asm/pgtable_64_types.h), or 0 for any
+ * other address. Adapted from KMSAN's vmalloc_meta().
+ */
+static u64 vmalloc_shadow(u64 addr)
+{
+	if (kt_is_vmalloc_addr(addr))
+		return KTSAN_VMALLOC_SHADOW_START +
+		       (addr - VMALLOC_START) * KT_SHADOW_RATIO;
+	if (kt_is_module_addr(addr))
+		return KTSAN_MODULES_SHADOW_START +
+		       (addr - MODULES_VADDR) * KT_SHADOW_RATIO;
 	return 0;
-}*/
+}
 
 static struct page *virt_to_page_or_null(void *vaddr)
 {
@@ -95,14 +121,18 @@ void *ktsan_get_shadow(void *address)
 {
 	u64 addr = ALIGN_DOWN((u64)address, KT_GRAIN);
 	struct page *page;
-	u64 off;
- 
+	u64 shadow, off;
+
 	/*
-	 * TODO: vmalloc and module ranges have no shadow yet.  KMSAN maps a
-	 * parallel VA region for them in vmalloc_meta(); until that exists,
-	 * accesses there fall through to the dummy shadow.
+	 * Mapped by ktsan_vmap_pages_range_noflush() and
+	 * ktsan_ioremap_page_range(). TODO: ranges mapped behind their back
+	 * (e.g. by vmap_pfn()) have no shadow mapped, and accesses to them
+	 * fault.
 	 */
- 
+	shadow = vmalloc_shadow(addr);
+	if (shadow)
+		return (void *)shadow;
+
 	page = virt_to_page_or_null((void *)addr);
 	if (!page || !page_has_metadata(page))
 		return NULL;
@@ -167,3 +197,216 @@ void ktsan_setup_meta(struct page *page, struct page **shadow, unsigned int orde
 	}
 }
 
+/*
+ * Clears the shadow of freshly allocated pages, so that they carry no history
+ * from their previous user. Shadow handed over from memblock is not zeroed
+ * either, so this must also run before KTSAN is enabled: hence no ENTER().
+ */
+void ktsan_alloc_page(struct page *page, unsigned int order)
+{
+	for (unsigned long i = 0; i < (1UL << order); i++) {
+		if (!page_has_metadata(&page[i]))
+			continue;
+		memset(shadow_ptr_for(&page[i]), 0,
+		       KT_SHADOW_RATIO * PAGE_SIZE);
+	}
+}
+
+/*
+ * Freeing pages is a write to all of them. Sync objects are dropped per
+ * page: kt_memblock_addr() keys them by the head page, which for a
+ * non-compound block of order > 0 may be any of its pages.
+ */
+void ktsan_free_page(struct page *page, unsigned int order)
+{
+	uptr_t addr = (uptr_t)page_address(page);
+
+	ENTER(KT_ENTER_NORMAL);
+	kt_access_range(thr, pc, addr, PAGE_SIZE << order, false);
+	for (unsigned long i = 0; i < (1UL << order); i++)
+		kt_memblock_free(thr, pc, addr + i * PAGE_SIZE, PAGE_SIZE,
+				 false);
+	LEAVE();
+}
+
+/*
+ * The page contents are copied by uninstrumented code (copy_page()), so
+ * carry the access history over with them. Adapted from KMSAN's
+ * kmsan_copy_page_meta().
+ */
+void ktsan_copy_page_meta(struct page *dst, struct page *src)
+{
+	if (!dst || !page_has_metadata(dst))
+		return;
+	if (!src || !page_has_metadata(src)) {
+		memset(shadow_ptr_for(dst), 0, KT_SHADOW_RATIO * PAGE_SIZE);
+		return;
+	}
+	memcpy(shadow_ptr_for(dst), shadow_ptr_for(src),
+	       KT_SHADOW_RATIO * PAGE_SIZE);
+}
+
+/* Data pages whose shadow ktsan_vmap_pages_range_noflush() maps at a time. */
+#define KT_VMAP_BATCH 512
+
+/*
+ * Maps the shadow of @pages at the shadow address of [start, end). Each data
+ * page has its own run of KT_SHADOW_RATIO shadow pages, and the runs of
+ * neighbouring pages are not contiguous, so the shadow is always mapped with
+ * small pages, whatever @page_shift is.
+ *
+ * Unlike KMSAN this runs before KTSAN is enabled too: vmalloc_init() comes
+ * before ktsan_init_runtime(), and anything mapped there is accessed later.
+ *
+ * Adapted from KMSAN's kmsan_vmap_pages_range_noflush().
+ */
+int ktsan_vmap_pages_range_noflush(unsigned long start, unsigned long end,
+				   pgprot_t prot, struct page **pages,
+				   unsigned int page_shift, gfp_t gfp_mask)
+{
+	unsigned long shadow_start, shadow, nr, batch;
+	struct page **s_pages, *run;
+	int err = 0;
+
+	shadow_start = vmalloc_shadow(start);
+	if (!shadow_start)
+		return 0;
+
+	nr = (end - start) / PAGE_SIZE;
+	batch = min(nr, (unsigned long)KT_VMAP_BATCH);
+	s_pages = kmalloc_array(batch * KT_SHADOW_RATIO, sizeof(*s_pages),
+				gfp_mask);
+	if (!s_pages)
+		return -ENOMEM;
+
+	shadow = shadow_start;
+	for (unsigned long i = 0; i < nr; i += batch) {
+		unsigned long n = min(batch, nr - i);
+
+		for (unsigned long k = 0; k < n; k++) {
+			if (page_has_metadata(pages[i + k]))
+				run = shadow_page_for(pages[i + k]);
+			else
+				run = virt_to_page(no_shadow_run);
+			for (int j = 0; j < KT_SHADOW_RATIO; j++)
+				s_pages[k * KT_SHADOW_RATIO + j] = &run[j];
+		}
+		err = __vmap_pages_range_noflush(
+			shadow, shadow + n * KT_SHADOW_RATIO * PAGE_SIZE,
+			PAGE_KERNEL, s_pages, PAGE_SHIFT);
+		if (err) {
+			__vunmap_range_noflush(shadow_start, shadow);
+			break;
+		}
+		shadow += n * KT_SHADOW_RATIO * PAGE_SIZE;
+	}
+	kfree(s_pages);
+	if (err)
+		return err;
+
+	/*
+	 * ktsan_vunmap_range_noflush() leaves the TLB alone, so there may be
+	 * stale entries for this range.
+	 */
+	flush_tlb_kernel_range(shadow_start, shadow);
+	flush_cache_vmap(shadow_start, shadow);
+	return 0;
+}
+
+/*
+ * The shadow pages stay attached to the data pages, so stale TLB entries for
+ * the range only point to the shadow of a page that is gone. They are flushed
+ * when the range is mapped again.
+ */
+void ktsan_vunmap_range_noflush(unsigned long start, unsigned long end)
+{
+	unsigned long shadow_start = vmalloc_shadow(start);
+	unsigned long shadow_end;
+
+	if (!shadow_start)
+		return;
+	shadow_end = shadow_start + (end - start) * KT_SHADOW_RATIO;
+	__vunmap_range_noflush(shadow_start, shadow_end);
+	flush_cache_vmap(shadow_start, shadow_end);
+}
+
+#define KT_SHADOW_ORDER ilog2(KT_SHADOW_RATIO)
+
+/*
+ * Frees the shadow that ktsan_ioremap_page_range() allocated for
+ * [start, start + nr pages).
+ */
+static void ktsan_free_io_shadow(unsigned long start, unsigned long nr)
+{
+	unsigned long shadow_start = vmalloc_shadow(start);
+	unsigned long shadow_end = shadow_start +
+				   nr * KT_SHADOW_RATIO * PAGE_SIZE;
+	unsigned long shadow;
+	struct page *page, *tmp;
+	LIST_HEAD(freed);
+
+	for (shadow = shadow_start; shadow < shadow_end;
+	     shadow += KT_SHADOW_RATIO * PAGE_SIZE) {
+		page = vmalloc_to_page((void *)shadow);
+		if (page)
+			list_add(&page->lru, &freed);
+	}
+	__vunmap_range_noflush(shadow_start, shadow_end);
+	/* Nothing may write to the shadow pages once they are freed. */
+	flush_tlb_kernel_range(shadow_start, shadow_end);
+	list_for_each_entry_safe(page, tmp, &freed, lru) {
+		list_del(&page->lru);
+		__free_pages(page, KT_SHADOW_ORDER);
+	}
+}
+
+/*
+ * I/O memory has no struct page, so it gets fresh zeroed shadow, freed by
+ * ktsan_iounmap_page_range(). Adapted from KMSAN's kmsan_ioremap_page_range().
+ */
+int ktsan_ioremap_page_range(unsigned long start, unsigned long end,
+			     phys_addr_t phys_addr, pgprot_t prot,
+			     unsigned int page_shift)
+{
+	struct page *run, *s_pages[KT_SHADOW_RATIO];
+	unsigned long shadow, nr, i;
+	int err = 0;
+
+	if (!vmalloc_shadow(start))
+		return 0;
+
+	nr = (end - start) / PAGE_SIZE;
+	for (i = 0; i < nr; i++) {
+		run = alloc_pages(GFP_KERNEL | __GFP_ZERO, KT_SHADOW_ORDER);
+		if (!run) {
+			err = -ENOMEM;
+			break;
+		}
+		for (int j = 0; j < KT_SHADOW_RATIO; j++)
+			s_pages[j] = &run[j];
+		shadow = vmalloc_shadow(start + i * PAGE_SIZE);
+		err = __vmap_pages_range_noflush(
+			shadow, shadow + KT_SHADOW_RATIO * PAGE_SIZE,
+			PAGE_KERNEL, s_pages, PAGE_SHIFT);
+		if (err) {
+			__free_pages(run, KT_SHADOW_ORDER);
+			break;
+		}
+	}
+	if (err) {
+		ktsan_free_io_shadow(start, i);
+		return err;
+	}
+	flush_tlb_kernel_range(vmalloc_shadow(start), vmalloc_shadow(start) +
+			       nr * KT_SHADOW_RATIO * PAGE_SIZE);
+	flush_cache_vmap(vmalloc_shadow(start), vmalloc_shadow(start) +
+			 nr * KT_SHADOW_RATIO * PAGE_SIZE);
+	return 0;
+}
+
+void ktsan_iounmap_page_range(unsigned long start, unsigned long end)
+{
+	if (!vmalloc_shadow(start))
+		return;
+	ktsan_free_io_shadow(start, (end - start) / PAGE_SIZE);
+}

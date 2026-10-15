@@ -8,6 +8,7 @@ ifdef CONFIG_FUNCTION_TRACER
 
 # Avoid recursion due to instrumentation.
 KCSAN_SANITIZE := n
+KTSAN_SANITIZE := n
 
 ifdef CONFIG_FTRACE_SELFTEST
 # selftest needs instrumentation

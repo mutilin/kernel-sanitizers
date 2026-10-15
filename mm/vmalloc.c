@@ -43,6 +43,7 @@
 #include <asm/tlbflush.h>
 #include <asm/shmparam.h>
 #include <linux/page_owner.h>
+#include <linux/ktsan.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmalloc.h>
@@ -340,6 +341,9 @@ int vmap_page_range(unsigned long addr, unsigned long end,
 	if (!err)
 		err = kmsan_ioremap_page_range(addr, end, phys_addr, prot,
 					       ioremap_max_page_shift);
+	if (!err)
+		err = ktsan_ioremap_page_range(addr, end, phys_addr, prot,
+					       ioremap_max_page_shift);
 	return err;
 }
 
@@ -503,6 +507,7 @@ void __vunmap_range_noflush(unsigned long start, unsigned long end)
 void vunmap_range_noflush(unsigned long start, unsigned long end)
 {
 	kmsan_vunmap_range_noflush(start, end);
+	ktsan_vunmap_range_noflush(start, end);
 	__vunmap_range_noflush(start, end);
 }
 
@@ -689,6 +694,10 @@ int vmap_pages_range_noflush(unsigned long addr, unsigned long end,
 	int ret = kmsan_vmap_pages_range_noflush(addr, end, prot, pages,
 						page_shift, gfp_mask);
 
+	if (ret)
+		return ret;
+	ret = ktsan_vmap_pages_range_noflush(addr, end, prot, pages,
+					     page_shift, gfp_mask);
 	if (ret)
 		return ret;
 	return __vmap_pages_range_noflush(addr, end, prot, pages, page_shift);

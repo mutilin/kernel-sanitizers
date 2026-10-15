@@ -125,12 +125,29 @@ extern unsigned int ptrs_per_p4d;
  * End of the region for which vmalloc page tables are pre-allocated.
  * For non-KMSAN builds, this is the same as VMALLOC_END.
  * For KMSAN builds, VMALLOC_START..VMEMORY_END is 4 times bigger than
- * VMALLOC_START..VMALLOC_END (see below).
+ * VMALLOC_START..VMALLOC_END, for KTSAN builds 8 times (see below).
  */
 #define VMEMORY_END		(VMALLOC_START + (VMALLOC_SIZE_TB << 40) - 1)
 
-#ifndef CONFIG_KMSAN
+#if !defined(CONFIG_KMSAN) && !defined(CONFIG_KTSAN)
 #define VMALLOC_END		VMEMORY_END
+#elif defined(CONFIG_KTSAN)
+/*
+ * In KTSAN builds vmalloc area is eight times smaller. KTSAN keeps four shadow
+ * bytes per byte of memory (KT_SHADOW_RATIO), and the shadow for virtual pages
+ * lives in the rest of the former vmalloc area, laid out as follows:
+ *
+ * 1st eighth:      VMALLOC_START to VMALLOC_END - new vmalloc area
+ * 2nd-5th eighths: KTSAN_VMALLOC_SHADOW_START - vmalloc area shadow
+ * 6th eighth:      KTSAN_MODULES_SHADOW_START to
+ *                  KTSAN_MODULES_SHADOW_START + 4 * MODULES_LEN
+ *                  - shadow for modules
+ */
+#define VMALLOC_EIGHTH_SIZE	((VMALLOC_SIZE_TB << 40) >> 3)
+#define VMALLOC_END		(VMALLOC_START + VMALLOC_EIGHTH_SIZE - 1)
+
+#define KTSAN_VMALLOC_SHADOW_START	(VMALLOC_START + VMALLOC_EIGHTH_SIZE)
+#define KTSAN_MODULES_SHADOW_START	(VMALLOC_START + 5 * VMALLOC_EIGHTH_SIZE)
 #else
 /*
  * In KMSAN builds vmalloc area is four times smaller, and the remaining 3/4

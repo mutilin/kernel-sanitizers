@@ -27,6 +27,7 @@
 #include <linux/kasan.h>
 #include <linux/node.h>
 #include <linux/kmsan.h>
+#include <linux/ktsan.h>
 #include <linux/cpu.h>
 #include <linux/cpuset.h>
 #include <linux/mempolicy.h>
@@ -2613,6 +2614,7 @@ bool slab_free_hook(struct kmem_cache *s, void *x, bool init,
 
 	kmemleak_free_recursive(x, s->flags);
 	kmsan_slab_free(s, x);
+	ktsan_slab_free(s, x, still_accessible);
 
 	debug_check_no_locks_freed(x, s->object_size);
 
@@ -4575,6 +4577,7 @@ bool slab_post_alloc_hook(struct kmem_cache *s, struct list_lru *lru,
 			kmemleak_alloc_recursive(p[i], s->object_size, 1,
 						 s->flags, init_flags);
 		kmsan_slab_alloc(s, p[i], init_flags);
+		ktsan_slab_alloc(s, p[i]);
 		alloc_tagging_slab_alloc_hook(s, p[i], flags);
 	}
 

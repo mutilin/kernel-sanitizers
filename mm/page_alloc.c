@@ -54,6 +54,7 @@
 #include <linux/delayacct.h>
 #include <linux/cacheinfo.h>
 #include <linux/pgalloc_tag.h>
+#include <linux/ktsan.h>
 #include <asm/div64.h>
 #include "internal.h"
 #include "shuffle.h"
@@ -1316,6 +1317,7 @@ __always_inline bool __free_pages_prepare(struct page *page,
 
 	trace_mm_page_free(page, order);
 	kmsan_free_page(page, order);
+	ktsan_free_page(page, order);
 
 	if (memcg_kmem_online() && PageMemcgKmem(page))
 		__memcg_kmem_uncharge_page(page, order);
@@ -1849,6 +1851,7 @@ inline void post_alloc_hook(struct page *page, unsigned int order,
 	/* If memory is still not initialized, initialize it now. */
 	if (init)
 		kernel_init_pages(page, 1 << order);
+	ktsan_alloc_page(page, order);
 
 	set_page_owner(page, order, gfp_flags);
 	page_table_check_alloc(page, order);

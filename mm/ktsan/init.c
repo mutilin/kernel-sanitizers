@@ -296,17 +296,6 @@ static void ktsan_memblock_discard(void)
 	}
 	kt_dropped += (unsigned long)collect.index << collect.order;
 	kt_dropped_left += (unsigned long)collect.index << collect.order;
-
-	#ifdef CONFIG_KTSAN_DEBUG
-	pr_info("KTSAN: in=%lu freed=%lu shadow=%lu dropped=%lu\n", 
-		kt_in, kt_disc_freed + kt_freed, kt_shadow + kt_disc_shadow, kt_dropped);
-	pr_info("KTSAN: held=%lu balance=%ld ratio=%lu.%03lu\n", 
-		held, (long)(kt_in - (kt_freed + kt_disc_freed + kt_shadow +
-			kt_disc_shadow + kt_dropped)),
-		kt_in / (kt_freed + kt_disc_freed),
-		(kt_in % (kt_freed + kt_disc_freed)) * 1000 /
-			(kt_freed + kt_disc_freed));
-	#endif
 }
 
 static void __init ktsan_report_memory_usage(void) 
@@ -453,7 +442,32 @@ void ktsan_task_stop(void)
 {
 	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
 	KT_BUG_ON(!task->running);
+	/* Context switch inside an interrupt? */
+	KT_BUG_ON(thr->interrupt_depth);
 	kt_thr_stop(thr, pc);
 	task->running = false;
+	LEAVE();
+}
+
+/*
+ * Hard interrupts run on the interrupted thread, with the state it was in the
+ * middle of stashed in its CPU's kt_cpu_t until the outermost one returns.
+ * Softirqs run from irq_exit_rcu() count as part of the interrupt. NMIs are
+ * ignored by ENTER().
+ */
+void ktsan_interrupt_enter(void)
+{
+	ENTER(KT_ENTER_NORMAL);
+	if (thr->interrupt_depth++ == 0)
+		kt_thr_interrupt(thr, pc, &thr->cpu->interrupted);
+	LEAVE();
+}
+
+void ktsan_interrupt_exit(void)
+{
+	ENTER(KT_ENTER_NORMAL);
+	KT_BUG_ON(thr->interrupt_depth <= 0);
+	if (--thr->interrupt_depth == 0)
+		kt_thr_resume(thr, pc, &thr->cpu->interrupted);
 	LEAVE();
 }

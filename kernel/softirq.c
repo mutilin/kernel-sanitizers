@@ -26,6 +26,7 @@
 #include <linux/smpboot.h>
 #include <linux/tick.h>
 #include <linux/irq.h>
+#include <linux/ktsan.h>
 #include <linux/wait_bit.h>
 #include <linux/workqueue.h>
 
@@ -661,6 +662,7 @@ asmlinkage __visible void __softirq_entry __do_softirq(void)
  */
 void irq_enter_rcu(void)
 {
+	ktsan_interrupt_enter();
 	__irq_enter_raw();
 
 	/*
@@ -750,6 +752,7 @@ static inline void __irq_exit_rcu(void)
 void irq_exit_rcu(void)
 {
 	__irq_exit_rcu();
+	ktsan_interrupt_exit();
 	 /* must be last! */
 	lockdep_hardirq_exit();
 }
@@ -762,6 +765,7 @@ void irq_exit_rcu(void)
 void irq_exit(void)
 {
 	__irq_exit_rcu();
+	ktsan_interrupt_exit();
 	ct_irq_exit();
 	 /* must be last! */
 	lockdep_hardirq_exit();

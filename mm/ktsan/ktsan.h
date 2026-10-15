@@ -219,6 +219,8 @@ struct kt_shadow_s {
 	unsigned long atomic : 1;
 };
 
+#define KT_SHADOW_TO_LONG(shadow) (*(long *)(&shadow))
+
 /* Reports. */
 
 struct kt_race_info_s {
@@ -480,6 +482,7 @@ static inline kt_task_t *kt_current_task(void)
 		goto exit;                                                     \
                                                                                \
 	pc = (uptr_t)_RET_IP_;                                                 \
+	(void)pc; /* Not every entry point needs it. */                        \
 	event_handled = true;                                                  \
 	/**/
 
@@ -643,9 +646,46 @@ void kt_spin_unlock(kt_spinlock_t *l);
 int kt_spin_is_locked(kt_spinlock_t *l);
 
 
-void kt_shadow_clear(uptr_t addr, size_t size);
+/*
+ * Plain accesses to runtime-shared words (shadow slots). The runtime is not
+ * instrumented, so these only stop the compiler from tearing or caching them.
+ */
+static __always_inline u64 kt_atomic64_load_no_ktsan(const void *addr)
+{
+	return READ_ONCE(*(u64 *)addr);
+}
 
-extern unsigned long kt_shadow_pages;
+static __always_inline void kt_atomic64_store_no_ktsan(void *addr, u64 value)
+{
+	WRITE_ONCE(*(u64 *)addr, value);
+}
+
+/* Memory accesses. */
+
+void kt_access(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size, bool read,
+	       bool atomic);
+void kt_access_range(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
+		     bool read);
+void kt_access_range_imitate(kt_thr_t *thr, uptr_t pc, uptr_t addr,
+			     size_t size, bool read);
+
+/* Memory blocks: slab objects and pages, and the sync objects inside them. */
+
+uptr_t kt_memblock_addr(uptr_t addr);
+void kt_memblock_add_sync(kt_thr_t *thr, uptr_t addr, kt_tab_sync_t *sync);
+void kt_memblock_remove_sync(kt_thr_t *thr, uptr_t addr, kt_tab_sync_t *sync);
+void kt_memblock_alloc(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
+		       bool write_to_shadow);
+void kt_memblock_free(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
+		      bool write_to_shadow);
+
+/* Sync objects. */
+
+void kt_sync_free(kt_thr_t *thr, uptr_t addr);
+
+/* Reports. */
+
+void kt_report_race(kt_thr_t *new, kt_race_info_t *info);
 
 /* Threads. */
 
