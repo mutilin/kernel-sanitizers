@@ -90,7 +90,11 @@ void kt_sync_acquire(kt_thr_t *thr, uptr_t pc, uptr_t addr)
 	if (sync == NULL)
 		return;
 	kt_acquire(thr, pc, sync);
+	/* RACE HUNTER: synchronization action acts as a fence for postponed
+	 * watchpoint accesses.
+	 */
 	kt_spin_unlock(&sync->tab.lock);
+	kt_rh_fence(thr, pc);
 }
 
 void kt_sync_release(kt_thr_t *thr, uptr_t pc, uptr_t addr)
@@ -105,7 +109,11 @@ void kt_sync_release(kt_thr_t *thr, uptr_t pc, uptr_t addr)
 	if (sync == NULL)
 		return;
 	kt_release(thr, pc, sync);
+	/* RACE HUNTER: synchronization action acts as a fence for postponed
+	 * watchpoint accesses.
+	 */
 	kt_spin_unlock(&sync->tab.lock);
+	kt_rh_fence(thr, pc);
 }
 
 void kt_acquire(kt_thr_t *thr, uptr_t pc, kt_tab_sync_t *sync)

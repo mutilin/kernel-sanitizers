@@ -69,6 +69,18 @@ kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 	}
 	new->seqcount_ignore = 0;
 	new->interrupt_depth = 0;
+	/* RACE HUNTER: initialize per-thread bridge state without changing the
+	 * original KTSAN thread lifecycle.
+	 */
+#if KT_ENABLE_RACE_HUNTER
+	smc_thread_handle_init(&new->smc_handle_storage, new->id);
+	new->smc_handle_storage.thread = new;
+	new->smc_handle = &new->smc_handle_storage;
+#else
+	new->smc_handle = NULL;
+#endif
+	new->smc_local_state = NULL;
+	new->smc_inside = 0;
 
 	kt_stat_inc(kt_stat_thread_create);
 	kt_stat_inc(kt_stat_threads);
@@ -96,6 +108,9 @@ void kt_thr_destroy(kt_thr_t *thr, kt_thr_t *old)
 		kt_seqcount_bug(old, 0, "read_disable_depth on thr end");
 	BUG_ON(old->seqcount_ignore != 0);
 	BUG_ON(old->interrupt_depth != 0);
+#if KT_ENABLE_RACE_HUNTER
+	smc_thread_handle_destroy(&old->smc_handle_storage);
+#endif
 
 	kt_spin_lock(&pool->lock);
 	list_add_tail(&old->quarantine_list, &pool->quarantine);
@@ -124,6 +139,8 @@ void kt_thr_start(kt_thr_t *thr, uptr_t pc)
 {
 	kt_trace_add_event(thr, kt_event_thr_start,
 			   smp_processor_id() | ((u32)thr->pid << 16));
+	/* RACE HUNTER: thread-start event for target/state analyses. */
+	kt_rh_thread_start(thr, pc);
 
 	thr->cpu = this_cpu_ptr(kt_ctx.cpus);
 	BUG_ON(thr->cpu->thr != NULL);
@@ -140,6 +157,11 @@ void kt_thr_stop(kt_thr_t *thr, uptr_t pc)
 	kt_percpu_release(thr, pc);
 
 	kt_trace_add_event(thr, kt_event_thr_stop, smp_processor_id());
+	/* RACE HUNTER: finish any postponed watchpoint access and report the
+	 * thread-finish event.
+	 */
+	kt_rh_fence(thr, pc);
+	kt_rh_thread_finish(thr, pc);
 
 	BUG_ON(thr->cpu == NULL);
 	BUG_ON(thr->cpu->thr != thr);
@@ -164,13 +186,8 @@ bool kt_thr_event_disable(kt_thr_t *thr, uptr_t pc, unsigned long *flags)
 	thr->event_disable_depth++;
 	BUG_ON(thr->event_disable_depth >= 3);
 
-	if (thr->event_disable_depth - 1 == 0) {
-		/* Disable interrupts as well. Otherwise all events
-		   that happen in interrupts will be ignored. */
+	if (thr->event_disable_depth == 1)
 		thr->irq_flags_before_disable = *flags;
-		/* Set all disabled in *flags. */
-		*flags = arch_local_irq_save();
-	}
 
 	return (thr->event_disable_depth - 1 == 0);
 }
@@ -190,12 +207,26 @@ bool kt_thr_event_enable(kt_thr_t *thr, uptr_t pc, unsigned long *flags)
 	thr->event_disable_depth--;
 	BUG_ON(thr->event_disable_depth < 0);
 
-	if (thr->event_disable_depth == 0) {
-		BUG_ON(!arch_irqs_disabled());
-		*flags = thr->irq_flags_before_disable;
-	}
-
 	return (thr->event_disable_depth == 0);
+}
+
+static void kt_thr_interrupt_event_state_save(kt_thr_t *thr,
+					      kt_interrupted_t *state)
+{
+	state->event_disable_depth = thr->event_disable_depth;
+	state->irq_flags_before_disable = thr->irq_flags_before_disable;
+	thr->event_disable_depth = 0;
+	thr->irq_flags_before_disable = 0;
+}
+
+static void kt_thr_interrupt_event_state_restore(kt_thr_t *thr,
+					         kt_interrupted_t *state)
+{
+	BUG_ON(thr->event_disable_depth);
+	thr->event_disable_depth = state->event_disable_depth;
+	thr->irq_flags_before_disable = state->irq_flags_before_disable;
+	state->event_disable_depth = 0;
+	state->irq_flags_before_disable = 0;
 }
 
 void kt_thr_report_disable(kt_thr_t *thr)
@@ -214,12 +245,7 @@ void kt_thr_interrupt(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 	BUG_ON(state->thr != NULL);
 	state->thr = thr;
 
-	BUG_ON(thr->event_disable_depth);
-	/* FIXME: fails during boot.
-	 * How can we receive an interrupt when interrupts are disabled?
-	 * We probably miss some enable of interrupt.
-	 * BUG_ON(thr->irqs_disabled);
-	 */
+	kt_thr_interrupt_event_state_save(thr, state);
 
 	kt_stack_copy(&state->stack, &thr->stack);
 	kt_stack_init(&thr->stack);
@@ -299,6 +325,7 @@ void kt_thr_resume(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 	thr->read_disable_depth = state->read_disable_depth;
 	thr->report_disable_depth = state->report_disable_depth;
 	thr->preempt_disable_depth = state->preempt_disable_depth;
+	kt_thr_interrupt_event_state_restore(thr, state);
 
 	kt_percpu_release(thr, pc);
 	list_replace_init(&state->percpu_list, &thr->percpu_list);

@@ -7,6 +7,10 @@ void kt_mtx_pre_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try)
 {
 	/* Will be used for deadlock detection.
 	   We can also put sleeps for random time here. */
+	/* RACE HUNTER: prelock is a scheduling-relevant event for CB/DPOR-like
+	 * analyses. The bridge currently maps it in the Race Hunter runtime.
+	 */
+	kt_rh_prelock(thr, pc);
 }
 
 void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try,
@@ -22,12 +26,12 @@ void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try,
 	if (!success)
 		return;
 
+	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
+
 	sync = kt_sync_ensure_created(thr, pc, addr);
 	if (!sync)
 		return;
 
-	/* This can catch unsafe publication of a mutex. */
-	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
 
 	kt_mutex_lock(thr, pc, sync->uid, wr);
 
@@ -39,18 +43,19 @@ void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr, bool try,
 	sync->last_lock_time = kt_clk_get(&thr->clk, thr->id);
 
 	kt_spin_unlock(&sync->tab.lock);
+	kt_rh_fence(thr, pc);
 }
 
 void kt_mtx_pre_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr)
 {
 	kt_tab_sync_t *sync;
 
+	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
+
 	sync = kt_sync_ensure_created(thr, pc, addr);
 	if (!sync)
 		return;
 
-	/* This can catch race between unlock and mutex destruction. */
-	kt_access(thr, pc, addr, KT_ACCESS_SIZE_1, true, false);
 
 	kt_mutex_unlock(thr, sync->uid, wr);
 
@@ -66,6 +71,7 @@ void kt_mtx_pre_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr)
 	sync->last_unlock_time = kt_clk_get(&thr->clk, thr->id);
 
 	kt_spin_unlock(&sync->tab.lock);
+	kt_rh_fence(thr, pc);
 }
 
 void kt_mtx_post_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr)
