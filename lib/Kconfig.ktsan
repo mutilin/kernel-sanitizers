@@ -24,3 +24,13 @@ config KTSAN_DEBUG
 
 	  Costs a small amount of __initdata and a few printk lines at
 	  boot. Say N unless you are working on KTSAN itself.
+
+config KTSAN_STATS
+	bool "Collect KTSAN runtime statistics"
+	depends on KTSAN && PROC_FS
+	help
+	  Counts accesses, function entries and exits, trace events,
+	  threads and race candidates per CPU, and shows the totals in
+	  /proc/ktsan_stats.
+
+	  Say N unless you are working on KTSAN itself.

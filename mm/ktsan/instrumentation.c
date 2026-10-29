@@ -5,19 +5,63 @@
  *
  * The callback set and signatures follow KCSAN's kernel/kcsan/core.c, which
  * implements the same ABI for this compiler.
- *
- * For now the callbacks only let the instrumented kernel link and boot: the
- * access, volatile and func entry/exit callbacks are empty, and atomics and
- * memory intrinsics just perform the operation.
- * TODO: route them to the runtime (kt_access*(), shadow stack) once the
- * trace and stack pieces are ported. They will then also need
- * user_access_save()/user_access_restore(), as in KMSAN: the compiler calls
- * them inside user_access_begin() regions, with the SMAP AC flag set.
  */
 #include "ktsan.h"
 
 #include <linux/export.h>
+#include <linux/log2.h>
 #include <linux/string.h>
+#include <linux/uaccess.h>
+
+static __always_inline void kt_tsan_access(kt_thr_t *thr, uptr_t pc,
+					   uptr_t addr, size_t size, bool read,
+					   bool atomic)
+{
+	if (likely((addr & (KT_GRAIN - 1)) + size <= KT_GRAIN)) {
+		kt_access(thr, pc, addr, ilog2(size), read, atomic);
+	} else if (size == 2 * KT_GRAIN && IS_ALIGNED(addr, KT_GRAIN)) {
+		kt_access(thr, pc, addr, KT_ACCESS_SIZE_8, read, atomic);
+		kt_access(thr, pc, addr + KT_GRAIN, KT_ACCESS_SIZE_8, read,
+			  atomic);
+	} else {
+		kt_access_range(thr, pc, addr, size, read);
+	}
+}
+
+#define KT_TSAN_ACCESS(ptr, size, read, atomic)                               \
+	do {                                                                  \
+		unsigned long ua_flags = user_access_save();                  \
+		{                                                             \
+			ENTER(KT_ENTER_NORMAL);                               \
+			kt_tsan_access(thr, pc, (uptr_t)(ptr), size, read,    \
+				       atomic);                               \
+			LEAVE();                                              \
+		}                                                             \
+		user_access_restore(ua_flags);                                \
+	} while (0)
+
+#define KT_TSAN_RANGE(ptr, size, read)                                        \
+	do {                                                                  \
+		if (!(size))                                                  \
+			break;                                                \
+		{                                                             \
+			ENTER(KT_ENTER_NORMAL);                               \
+			kt_access_range(thr, pc, (uptr_t)(ptr), size, read);  \
+			LEAVE();                                              \
+		}                                                             \
+	} while (0)
+
+#define KT_TSAN_COPY(dst, src, len)                                           \
+	do {                                                                  \
+		if (!(len))                                                   \
+			break;                                                \
+		{                                                             \
+			ENTER(KT_ENTER_NORMAL);                               \
+			kt_access_range(thr, pc, (uptr_t)(src), len, true);   \
+			kt_access_range(thr, pc, (uptr_t)(dst), len, false);  \
+			LEAVE();                                              \
+		}                                                             \
+	} while (0)
 
 /* Plain accesses; a compound read-write is one call. */
 
@@ -25,6 +69,7 @@
 	void __tsan_read##size(void *ptr);                                    \
 	void __tsan_read##size(void *ptr)                                     \
 	{                                                                     \
+		KT_TSAN_ACCESS(ptr, size, true, false);                       \
 	}                                                                     \
 	EXPORT_SYMBOL(__tsan_read##size);                                     \
 	void __tsan_unaligned_read##size(void *ptr)                           \
@@ -33,6 +78,7 @@
 	void __tsan_write##size(void *ptr);                                   \
 	void __tsan_write##size(void *ptr)                                    \
 	{                                                                     \
+		KT_TSAN_ACCESS(ptr, size, false, false);                      \
 	}                                                                     \
 	EXPORT_SYMBOL(__tsan_write##size);                                    \
 	void __tsan_unaligned_write##size(void *ptr)                          \
@@ -41,6 +87,7 @@
 	void __tsan_read_write##size(void *ptr);                              \
 	void __tsan_read_write##size(void *ptr)                               \
 	{                                                                     \
+		KT_TSAN_ACCESS(ptr, size, false, false);                      \
 	}                                                                     \
 	EXPORT_SYMBOL(__tsan_read_write##size);                               \
 	void __tsan_unaligned_read_write##size(void *ptr)                     \
@@ -56,12 +103,20 @@ DEFINE_TSAN_READ_WRITE(16);
 void __tsan_read_range(void *ptr, size_t size);
 void __tsan_read_range(void *ptr, size_t size)
 {
+	unsigned long ua_flags = user_access_save();
+
+	KT_TSAN_RANGE(ptr, size, true);
+	user_access_restore(ua_flags);
 }
 EXPORT_SYMBOL(__tsan_read_range);
 
 void __tsan_write_range(void *ptr, size_t size);
 void __tsan_write_range(void *ptr, size_t size)
 {
+	unsigned long ua_flags = user_access_save();
+
+	KT_TSAN_RANGE(ptr, size, false);
+	user_access_restore(ua_flags);
 }
 EXPORT_SYMBOL(__tsan_write_range);
 
@@ -71,6 +126,7 @@ EXPORT_SYMBOL(__tsan_write_range);
 	void __tsan_volatile_read##size(void *ptr);                           \
 	void __tsan_volatile_read##size(void *ptr)                            \
 	{                                                                     \
+		KT_TSAN_ACCESS(ptr, size, true, true);                        \
 	}                                                                     \
 	EXPORT_SYMBOL(__tsan_volatile_read##size);                            \
 	void __tsan_unaligned_volatile_read##size(void *ptr)                  \
@@ -79,6 +135,7 @@ EXPORT_SYMBOL(__tsan_write_range);
 	void __tsan_volatile_write##size(void *ptr);                          \
 	void __tsan_volatile_write##size(void *ptr)                           \
 	{                                                                     \
+		KT_TSAN_ACCESS(ptr, size, false, true);                       \
 	}                                                                     \
 	EXPORT_SYMBOL(__tsan_volatile_write##size);                           \
 	void __tsan_unaligned_volatile_write##size(void *ptr)                 \
@@ -96,12 +153,28 @@ DEFINE_TSAN_VOLATILE_READ_WRITE(16);
 void __tsan_func_entry(void *call_pc);
 void __tsan_func_entry(void *call_pc)
 {
+	unsigned long ua_flags = user_access_save();
+
+	{
+		ENTER(KT_ENTER_NORMAL);
+		kt_func_entry(thr, (uptr_t)call_pc);
+		LEAVE();
+	}
+	user_access_restore(ua_flags);
 }
 EXPORT_SYMBOL(__tsan_func_entry);
 
 void __tsan_func_exit(void);
 void __tsan_func_exit(void)
 {
+	unsigned long ua_flags = user_access_save();
+
+	{
+		ENTER(KT_ENTER_NORMAL);
+		kt_func_exit(thr);
+		LEAVE();
+	}
+	user_access_restore(ua_flags);
 }
 EXPORT_SYMBOL(__tsan_func_exit);
 
@@ -206,6 +279,7 @@ EXPORT_SYMBOL(__tsan_atomic_signal_fence);
 void *__tsan_memset(void *s, int c, size_t count);
 noinline void *__tsan_memset(void *s, int c, size_t count)
 {
+	KT_TSAN_RANGE(s, count, false);
 	return memset(s, c, count);
 }
 EXPORT_SYMBOL(__tsan_memset);
@@ -213,6 +287,7 @@ EXPORT_SYMBOL(__tsan_memset);
 void *__tsan_memmove(void *dst, const void *src, size_t len);
 noinline void *__tsan_memmove(void *dst, const void *src, size_t len)
 {
+	KT_TSAN_COPY(dst, src, len);
 	return memmove(dst, src, len);
 }
 EXPORT_SYMBOL(__tsan_memmove);
@@ -220,6 +295,7 @@ EXPORT_SYMBOL(__tsan_memmove);
 void *__tsan_memcpy(void *dst, const void *src, size_t len);
 noinline void *__tsan_memcpy(void *dst, const void *src, size_t len)
 {
+	KT_TSAN_COPY(dst, src, len);
 	return memcpy(dst, src, len);
 }
 EXPORT_SYMBOL(__tsan_memcpy);

@@ -28,6 +28,8 @@ __init void kt_thr_pool_init(void)
 kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 {
 	kt_thr_pool_t *pool = &kt_ctx.thr_pool;
+	kt_time_t epoch = 0;
+	bool reused = false;
 	kt_thr_t *new;
 	int i;
 
@@ -37,12 +39,13 @@ kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 		new->id = pool->new_id;
 		pool->new_id++;
 		pool->thrs[new->id] = new;
-	} else if (pool->quarantine_size) {
+	} else if (pool->quarantine_size > KT_THR_QUARANTINE_SIZE) {
 		/* Reuse a dead thread together with its id. */
 		new = list_first_entry(&pool->quarantine, kt_thr_t,
 				       quarantine_list);
 		list_del(&new->quarantine_list);
 		pool->quarantine_size--;
+		reused = true;
 	} else {
 		kt_spin_unlock(&pool->lock);
 		pr_warn_once("KTSAN: maximum number of threads (%d) is reached, new tasks are not tracked\n",
@@ -57,6 +60,10 @@ kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 		pid = --pool->new_pid;
 	kt_spin_unlock(&pool->lock);
 
+	if (reused)
+		epoch = round_up(kt_clk_get(&new->clk, new->id) + 1,
+				 KT_TRACE_PART_SIZE) - 1;
+
 	new->pid = pid;
 	new->inside = 0;
 	new->cpu = NULL;
@@ -66,8 +73,10 @@ kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 	kt_clk_init(&new->release_clk);
 	new->release_active = 0;
 	kt_stack_init(&new->stack);
-	new->mutexset.size = 0;
-	kt_trace_init(&new->trace);
+	new->stack_overflow = 0;
+	kt_mutexset_init(&new->mutexset);
+	if (!reused)
+		kt_trace_init(&new->trace);
 	new->read_disable_depth = 0;
 	new->event_disable_depth = 0;
 	new->report_disable_depth = 0;
@@ -89,6 +98,8 @@ kt_thr_t *kt_thr_create(kt_thr_t *thr, int pid)
 
 	kt_stat_inc(kt_stat_thread_create);
 	kt_stat_inc(kt_stat_threads);
+
+	new->clk.time[new->id] = epoch;
 
 	/* thr == NULL when thread #0 is being initialized. */
 	if (thr == NULL)
@@ -140,7 +151,9 @@ kt_thr_t *kt_thr_get(int id)
 /* Binds @thr to the current CPU. */
 void kt_thr_start(kt_thr_t *thr, uptr_t pc)
 {
-	/* TODO: kt_trace_add_event(kt_event_thr_start) once trace.c is ported. */
+	kt_trace_add_event(thr, kt_event_thr_start,
+			   smp_processor_id() | ((u64)(u32)thr->pid << 16));
+
 	thr->cpu = this_cpu_ptr(kt_ctx.cpus);
 	KT_BUG_ON(thr->cpu->thr != NULL);
 	thr->cpu->thr = thr;
@@ -151,9 +164,10 @@ void kt_thr_stop(kt_thr_t *thr, uptr_t pc)
 {
 	KT_BUG_ON(thr->event_disable_depth != 0);
 	/*
-	 * TODO: kt_percpu_release() and kt_trace_add_event(kt_event_thr_stop)
-	 * once sync_percpu.c and trace.c are ported.
+	 * TODO: kt_percpu_release() once sync_percpu.c is ported.
 	 */
+	kt_trace_add_event(thr, kt_event_thr_stop, smp_processor_id());
+
 	KT_BUG_ON(thr->cpu == NULL);
 	KT_BUG_ON(thr->cpu->thr != thr);
 	thr->cpu->thr = NULL;
@@ -172,13 +186,13 @@ void kt_thr_interrupt(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 
 	KT_BUG_ON(thr->event_disable_depth);
 
-	/*
-	 * TODO: save and reset thr->stack (kt_stack_copy()) and add a
-	 * kt_event_interrupt to the trace once stack.c and trace.c are ported.
-	 */
+	kt_stack_copy(&state->stack, &thr->stack);
+	kt_stack_init(&thr->stack);
+	state->stack_overflow = thr->stack_overflow;
+	thr->stack_overflow = 0;
 
 	state->mutexset = thr->mutexset;
-	thr->mutexset.size = 0;
+	kt_mutexset_init(&thr->mutexset);
 
 	state->acquire_active = thr->acquire_active;
 	if (thr->acquire_active) {
@@ -207,11 +221,15 @@ void kt_thr_interrupt(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 	memset(&thr->seqcount_pc, 0, sizeof(thr->seqcount_pc));
 	state->seqcount_ignore = thr->seqcount_ignore;
 	thr->seqcount_ignore = 0;
+
+	kt_trace_add_event(thr, kt_event_interrupt, 0);
 }
 
 /* Returns to the interrupted thread the state saved by kt_thr_interrupt(). */
 void kt_thr_resume(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 {
+	int i;
+
 	KT_BUG_ON(state->thr != thr);
 	state->thr = NULL;
 
@@ -222,13 +240,22 @@ void kt_thr_resume(kt_thr_t *thr, uptr_t pc, kt_interrupted_t *state)
 	KT_BUG_ON(thr->preempt_disable_depth);
 	KT_BUG_ON(thr->seqcount[0]);
 	KT_BUG_ON(thr->seqcount_ignore);
+	KT_BUG_ON(thr->stack.size || thr->stack_overflow);
 
-	/*
-	 * TODO: add a kt_event_interrupt to the trace and replay the saved
-	 * stack (kt_func_entry()) and mutexset (kt_event_lock/rlock) into it
-	 * once stack.c and trace.c are ported.
-	 */
+	kt_trace_add_event(thr, kt_event_interrupt, 0);
+	kt_stack_init(&thr->stack);
+	for (i = 0; i < state->stack.size; i++)
+		kt_func_entry(thr, kt_decompress(state->stack.pc[i]));
+	thr->stack_overflow = state->stack_overflow;
+
 	thr->mutexset = state->mutexset;
+	for (i = 0; i < thr->mutexset.size; i++) {
+		kt_locked_mutex_t *mtx = &thr->mutexset.mtx[i];
+
+		kt_trace_add_event2(thr,
+				    mtx->write ? kt_event_lock : kt_event_rlock,
+				    mtx->uid, mtx->stack);
+	}
 
 	thr->acquire_active = state->acquire_active;
 	if (thr->acquire_active)

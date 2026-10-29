@@ -416,17 +416,20 @@ void ktsan_task_create(struct task_struct *p)
 void ktsan_task_destroy(struct task_struct *p)
 {
 	kt_task_t *old = p->ktsan.task;
+	unsigned long flags;
 
 	if (!old)
 		return;
 
-	ENTER(KT_ENTER_SCHED | KT_ENTER_DISABLED);
+	preempt_disable();
+	flags = arch_local_irq_save();
 	KT_BUG_ON(old->running);
-	kt_thr_destroy(thr, old->thr);
+	kt_thr_destroy(NULL, old->thr);
 	old->thr = NULL;
 	kt_cache_free(&kt_ctx.task_cache, old);
 	p->ktsan.task = NULL;
-	LEAVE();
+	arch_local_irq_restore(flags);
+	preempt_enable_no_resched();
 }
 
 void ktsan_task_start(void)

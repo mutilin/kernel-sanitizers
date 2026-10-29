@@ -8,11 +8,15 @@ obj-y        :=	init.o \
 		stack_depot.o \
 		clk.o \
 		trace.o \
+		stack.o \
+		func.o \
+		mutexset.o \
 		access.o \
 		memblock.o \
 		sync.o \
 		report.o \
 		instrumentation.o
+obj-$(CONFIG_KTSAN_STATS) += stat.o
   
 CFLAGS_REMOVE_init.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_shadow.o			:= -pg -O0 -O1 -O2
@@ -22,6 +26,10 @@ CFLAGS_REMOVE_thr.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_stack_depot.o		:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_clk.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_trace.o			:= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_stack.o			:= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_func.o			:= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_mutexset.o		:= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_stat.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_access.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_memblock.o		:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_sync.o			:= -pg -O0 -O1 -O2
@@ -37,6 +45,10 @@ CFLAGS_thr.o			:= -O3 -fomit-frame-pointer
 CFLAGS_stack_depot.o		:= -O3 -fomit-frame-pointer
 CFLAGS_clk.o			:= -O3 -fomit-frame-pointer
 CFLAGS_trace.o			:= -O3 -fomit-frame-pointer
+CFLAGS_stack.o			:= -O3 -fomit-frame-pointer
+CFLAGS_func.o			:= -O3 -fomit-frame-pointer
+CFLAGS_mutexset.o		:= -O3 -fomit-frame-pointer
+CFLAGS_stat.o			:= -O3 -fomit-frame-pointer
 CFLAGS_access.o			:= -O3 -fomit-frame-pointer
 CFLAGS_memblock.o		:= -O3 -fomit-frame-pointer
 CFLAGS_sync.o			:= -O3 -fomit-frame-pointer

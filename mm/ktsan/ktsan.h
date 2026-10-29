@@ -26,8 +26,9 @@
 #define KT_CLOCK_BITS 42	
 
 
-#define KT_MAX_THREAD_COUNT 128
+#define KT_MAX_THREAD_COUNT 256
 #define KT_MAX_TASK_COUNT KT_MAX_THREAD_COUNT
+#define KT_THR_QUARANTINE_SIZE 16
 
 #define KT_SYNC_TAB_SIZE 196613 /* prime: hash partition count */
 #define KT_MEMBLOCK_TAB_SIZE 196613
@@ -44,7 +45,7 @@
 #define KT_STACK_DEPOT_MEMORY_LIMIT (16 << 20)
  
 #define KT_TRACE_PARTS 8
-#define KT_TRACE_PART_SIZE (1 << 10)
+#define KT_TRACE_PART_SIZE (1 << 12)
 #define KT_TRACE_SIZE (KT_TRACE_PARTS * KT_TRACE_PART_SIZE)
 
 
@@ -287,6 +288,7 @@ struct kt_thr_s {
 	kt_cpu_t *cpu;
 	kt_clk_t clk;
 	kt_stack_t stack;
+	int stack_overflow;
 	kt_mutexset_t mutexset;
 	kt_clk_t acquire_clk;
 	int acquire_active;
@@ -320,6 +322,7 @@ struct kt_thr_s {
 struct kt_interrupted_s {
 	kt_thr_t *thr;
 	kt_stack_t stack;
+	int stack_overflow;
 	kt_mutexset_t mutexset;
 	kt_clk_t acquire_clk;
 	int acquire_active;
@@ -355,6 +358,7 @@ struct kt_percpu_sync_s {
 
 enum kt_stat_e {
 	kt_stat_reports,
+	kt_stat_races,
 	kt_stat_access_read,
 	kt_stat_access_write,
 	kt_stat_access_size1,
@@ -499,7 +503,7 @@ exit:                                                                          \
 
 /* Statistics. Enabled only when KT_ENABLE_STATS = 1. */
 
-void kt_stat_init(void);
+void kt_stat_collect(kt_stats_t *stat);
 
 static inline void kt_stat_add(kt_stat_t what, unsigned long x)
 {
@@ -555,6 +559,9 @@ static __always_inline u32 kt_stack_pop(kt_stack_t *stack)
 	BUG_ON(stack->size <= 0);
 	return stack->pc[--stack->size];
 }
+
+void kt_func_entry(kt_thr_t *thr, uptr_t pc);
+void kt_func_exit(kt_thr_t *thr);
 
 void kt_stack_copy(kt_stack_t *dst, kt_stack_t *src);
 void kt_stack_print(kt_stack_t *stack, uptr_t top_pc);
@@ -659,6 +666,16 @@ static __always_inline void kt_atomic64_store_no_ktsan(void *addr, u64 value)
 {
 	WRITE_ONCE(*(u64 *)addr, value);
 }
+
+void kt_mutexset_init(kt_mutexset_t *set);
+void kt_mutexset_lock(kt_mutexset_t *set, u64 uid, kt_stack_handle_t stk,
+		      bool wr);
+void kt_mutexset_unlock(kt_mutexset_t *set, u64 uid, bool wr);
+void kt_mutexset_downgrade(kt_mutexset_t *set, u64 uid);
+
+void kt_mutex_lock(kt_thr_t *thr, uptr_t pc, u64 sync_uid, bool write);
+void kt_mutex_unlock(kt_thr_t *thr, u64 sync_uid, bool write);
+void kt_mutex_downgrade(kt_thr_t *thr, u64 sync_uid);
 
 /* Memory accesses. */
 

@@ -16,6 +16,13 @@ static __always_inline bool ranges_intersect(int first_offset, int first_size,
 	return true;
 }
 
+static __always_inline bool kt_shadow_weaker_or_equal(kt_shadow_t old,
+						      kt_shadow_t value)
+{
+	return (old.read | (old.atomic << 1)) >=
+	       (value.read | (value.atomic << 1));
+}
+
 static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
 						   kt_shadow_t *slot,
 						   kt_shadow_t value,
@@ -38,15 +45,19 @@ static __always_inline bool update_one_shadow_slot(kt_thr_t *thr, uptr_t addr,
 	if (value.offset == old.offset && value.size == old.size) {
 		/* Same thread? */
 		if (likely(value.tid == old.tid)) {
-			/* TODO. */
-			return false;
+			if (!kt_shadow_weaker_or_equal(old, value))
+				return false;
+			kt_atomic64_store_no_ktsan(
+				slot, stored ? 0 : KT_SHADOW_TO_LONG(value));
+			return true;
 		}
 
 		/* Happens-before? */
 		if (likely(kt_clk_get(&thr->clk, old.tid) >= old.clock)) {
-			if (!stored)
-				kt_atomic64_store_no_ktsan(
-					slot, KT_SHADOW_TO_LONG(value));
+			if (!kt_shadow_weaker_or_equal(old, value))
+				return false;
+			kt_atomic64_store_no_ktsan(
+				slot, stored ? 0 : KT_SHADOW_TO_LONG(value));
 			return true;
 		}
 
@@ -85,13 +96,10 @@ report_race:
 /*
  * Every access starts a new epoch of the thread, so that it can be told apart
  * from earlier ones.
- *
- * TODO: kt_trace_add_event(thr, kt_event_mop, kt_compress(pc)) once the trace
- * is ported; it ticks the clock itself.
  */
 static __always_inline void kt_access_tick(kt_thr_t *thr, uptr_t pc)
 {
-	kt_clk_tick(&thr->clk, thr->id);
+	kt_trace_add_event(thr, kt_event_mop, kt_compress(pc));
 }
 
 static __always_inline void kt_access_impl(kt_thr_t *thr, kt_shadow_t *slots,
