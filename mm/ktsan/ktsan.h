@@ -2,6 +2,7 @@
 #ifndef __X86_MM_KTSAN_KTSAN_H
 #define __X86_MM_KTSAN_KTSAN_H
 
+#include <linux/atomic.h>
 #include <linux/init.h>
 #include <linux/ktsan.h>
 #include <linux/kernel.h>
@@ -667,6 +668,15 @@ static __always_inline void kt_atomic64_store_no_ktsan(void *addr, u64 value)
 	WRITE_ONCE(*(u64 *)addr, value);
 }
 
+/*
+ * raw_atomic64_*() skips atomic-instrumented.h, which will call back into
+ * KTSAN once atomics are hooked.
+ */
+static __always_inline u64 kt_atomic64_fetch_add_no_ktsan(void *addr, u64 value)
+{
+	return raw_atomic64_fetch_add(value, (atomic64_t *)addr);
+}
+
 void kt_mutexset_init(kt_mutexset_t *set);
 void kt_mutexset_lock(kt_mutexset_t *set, u64 uid, kt_stack_handle_t stk,
 		      bool wr);
@@ -698,7 +708,14 @@ void kt_memblock_free(kt_thr_t *thr, uptr_t pc, uptr_t addr, size_t size,
 
 /* Sync objects. */
 
+bool kt_sync_is_page_struct_addr(uptr_t addr);
+kt_tab_sync_t *kt_sync_ensure_created(kt_thr_t *thr, uptr_t pc, uptr_t addr);
 void kt_sync_free(kt_thr_t *thr, uptr_t addr);
+void kt_sync_acquire(kt_thr_t *thr, uptr_t pc, uptr_t addr);
+void kt_sync_release(kt_thr_t *thr, uptr_t pc, uptr_t addr);
+
+void kt_acquire(kt_thr_t *thr, uptr_t pc, kt_tab_sync_t *sync);
+void kt_release(kt_thr_t *thr, uptr_t pc, kt_tab_sync_t *sync);
 
 /* Reports. */
 
