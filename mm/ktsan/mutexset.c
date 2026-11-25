@@ -11,7 +11,13 @@ void kt_mutexset_lock(kt_mutexset_t *set, u64 uid, kt_stack_handle_t stk,
 {
 	kt_locked_mutex_t *mtx;
 
-	BUG_ON(set->size >= ARRAY_SIZE(set->mtx));
+	/*
+	 * The set only feeds reports, so locks held beyond its size are left
+	 * out rather than BUG()ing (kt_trace_restore_state() does the same).
+	 * Their unlock then finds nothing to remove.
+	 */
+	if (set->size >= ARRAY_SIZE(set->mtx))
+		return;
 	mtx = &set->mtx[set->size++];
 	mtx->uid = uid;
 	mtx->write = wr;

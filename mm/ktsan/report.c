@@ -108,3 +108,45 @@ void kt_report_race(kt_thr_t *new, kt_race_info_t *info)
 
 	kt_spin_unlock(&kt_report_lock);
 }
+
+/*
+ * @new write-unlocks (or downgrades) a lock that thread sync->lock_tid holds.
+ * The caller holds sync->tab.lock.
+ */
+void kt_report_bad_mtx_unlock(kt_thr_t *new, uptr_t pc, kt_tab_sync_t *sync)
+{
+	kt_thr_t *old;
+	kt_trace_state_t state;
+
+	KT_BUG_ON(sync->lock_tid == -1);
+	KT_BUG_ON(sync->lock_tid == new->id);
+
+	if (new->report_disable_depth != 0)
+		return;
+
+	old = kt_thr_get(sync->lock_tid);
+	if (old == NULL)
+		return;
+	kt_trace_restore_state(old, sync->last_lock_time, &state);
+	if (state.stack.size == 0)
+		return;
+
+	kt_spin_lock(&kt_report_lock);
+
+	pr_err("==================================================================\n");
+	pr_err("ThreadSanitizer: lock 0x%px unlocked by a different thread\n\n",
+	       (void *)sync->tab.key);
+
+	pr_err("Unlock by thread %d on CPU %d:\n", new->pid, smp_processor_id());
+	kt_stack_print(&new->stack, pc);
+
+	pr_err("Previous lock by thread %d on CPU %d:\n", state.pid,
+	       state.cpu_id);
+	kt_stack_print(&state.stack, 0);
+
+	pr_err("==================================================================\n");
+
+	kt_stat_inc(kt_stat_reports);
+
+	kt_spin_unlock(&kt_report_lock);
+}

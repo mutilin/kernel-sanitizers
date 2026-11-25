@@ -717,9 +717,17 @@ void kt_sync_release(kt_thr_t *thr, uptr_t pc, uptr_t addr);
 void kt_acquire(kt_thr_t *thr, uptr_t pc, kt_tab_sync_t *sync);
 void kt_release(kt_thr_t *thr, uptr_t pc, kt_tab_sync_t *sync);
 
+/* Locks. */
+
+void kt_mtx_post_lock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr,
+		      bool try, bool success);
+void kt_mtx_pre_unlock(kt_thr_t *thr, uptr_t pc, uptr_t addr, bool wr);
+void kt_mtx_downgrade(kt_thr_t *thr, uptr_t pc, uptr_t addr);
+
 /* Reports. */
 
 void kt_report_race(kt_thr_t *new, kt_race_info_t *info);
+void kt_report_bad_mtx_unlock(kt_thr_t *new, uptr_t pc, kt_tab_sync_t *sync);
 
 /* Threads. */
 

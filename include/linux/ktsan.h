@@ -4,6 +4,7 @@
 #include <linux/gfp.h>
 #include <linux/bug.h>
 #include <linux/init.h>
+#include <linux/ktsan-checks.h> /* Sync hooks: ktsan_sync_*(), ktsan_mtx_*(). */
 #include <linux/types.h>
 
 struct kmem_cache;
@@ -195,22 +196,6 @@ void ktsan_interrupt_enter(void);
  */
 void ktsan_interrupt_exit(void);
 
-/*
- * ktsan_sync_acquire() - Acquires the happens-before released into @addr.
- * @addr: any address used as the key of the edge.
- *
- * For synchronization KTSAN can't see on its own. Everything the releasing
- * thread did before ktsan_sync_release(@addr) happens before everything the
- * current thread does after this call.
- */
-void ktsan_sync_acquire(void *addr);
-
-/*
- * ktsan_sync_release() - Releases the current thread's clock into @addr.
- * @addr: any address used as the key of the edge.
- */
-void ktsan_sync_release(void *addr);
-
 extern bool ktsan_enabled;
 extern int panic_on_ktsan;
 
@@ -327,14 +312,6 @@ static inline void ktsan_interrupt_enter(void)
 }
 
 static inline void ktsan_interrupt_exit(void)
-{
-}
-
-static inline void ktsan_sync_acquire(void *addr)
-{
-}
-
-static inline void ktsan_sync_release(void *addr)
 {
 }
 

@@ -36,22 +36,57 @@ do {								\
 extern int do_raw_write_trylock(rwlock_t *lock) __cond_acquires(true, lock);
  extern void do_raw_write_unlock(rwlock_t *lock) __releases(lock);
 #else
-# define do_raw_read_lock(rwlock)	do {__acquire_shared(lock); arch_read_lock(&(rwlock)->raw_lock); } while (0)
+/* KTSAN hooks: read holds are shared (write == false). See spinlock.h. */
+# define do_raw_read_lock(rwlock)					\
+	do {								\
+		__acquire_shared(lock);					\
+		ktsan_mtx_pre_lock(rwlock, false, false);		\
+		arch_read_lock(&(rwlock)->raw_lock);			\
+		ktsan_mtx_post_lock(rwlock, false, false, true);	\
+	} while (0)
 static inline int do_raw_read_trylock(rwlock_t *rwlock)
 	__cond_acquires_shared(true, rwlock)
 	__no_context_analysis
 {
-	return arch_read_trylock(&(rwlock)->raw_lock);
+	int ret;
+
+	ktsan_mtx_pre_lock(rwlock, false, true);
+	ret = arch_read_trylock(&(rwlock)->raw_lock);
+	ktsan_mtx_post_lock(rwlock, false, true, ret);
+	return ret;
 }
-# define do_raw_read_unlock(rwlock)	do {arch_read_unlock(&(rwlock)->raw_lock); __release_shared(lock); } while (0)
-# define do_raw_write_lock(rwlock)	do {__acquire(lock); arch_write_lock(&(rwlock)->raw_lock); } while (0)
+# define do_raw_read_unlock(rwlock)					\
+	do {								\
+		ktsan_mtx_pre_unlock(rwlock, false);			\
+		arch_read_unlock(&(rwlock)->raw_lock);			\
+		ktsan_mtx_post_unlock(rwlock, false);			\
+		__release_shared(lock);					\
+	} while (0)
+# define do_raw_write_lock(rwlock)					\
+	do {								\
+		__acquire(lock);					\
+		ktsan_mtx_pre_lock(rwlock, true, false);		\
+		arch_write_lock(&(rwlock)->raw_lock);			\
+		ktsan_mtx_post_lock(rwlock, true, false, true);		\
+	} while (0)
 static inline int do_raw_write_trylock(rwlock_t *rwlock)
 	__cond_acquires(true, rwlock)
 	__no_context_analysis
 {
-	return arch_write_trylock(&(rwlock)->raw_lock);
+	int ret;
+
+	ktsan_mtx_pre_lock(rwlock, true, true);
+	ret = arch_write_trylock(&(rwlock)->raw_lock);
+	ktsan_mtx_post_lock(rwlock, true, true, ret);
+	return ret;
 }
-# define do_raw_write_unlock(rwlock)	do {arch_write_unlock(&(rwlock)->raw_lock); __release(lock); } while (0)
+# define do_raw_write_unlock(rwlock)					\
+	do {								\
+		ktsan_mtx_pre_unlock(rwlock, true);			\
+		arch_write_unlock(&(rwlock)->raw_lock);			\
+		ktsan_mtx_post_unlock(rwlock, true);			\
+		__release(lock);					\
+	} while (0)
 #endif
 
 /*

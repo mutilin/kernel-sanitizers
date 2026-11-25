@@ -62,6 +62,7 @@
 #include <linux/bottom_half.h>
 #include <linux/lockdep.h>
 #include <linux/cleanup.h>
+#include <linux/ktsan-checks.h>
 #include <asm/barrier.h>
 #include <asm/mmiowb.h>
 
@@ -181,28 +182,41 @@ do {									\
  extern int do_raw_spin_trylock(raw_spinlock_t *lock) __cond_acquires(true, lock);
  extern void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock);
 #else
+/*
+ * The KTSAN hooks sit at this level, under every raw_spin_*() and spin_*()
+ * flavour (irq/bh/nested/LOCK_CONTENDED), so each lock op is seen once.
+ * spinlock_t wraps a raw_spinlock_t at offset 0, so both share one sync
+ * object.
+ */
 static inline void do_raw_spin_lock(raw_spinlock_t *lock) __acquires(lock)
 {
 	__acquire(lock);
+	ktsan_mtx_pre_lock(lock, true, false);
 	arch_spin_lock(&lock->raw_lock);
 	mmiowb_spin_lock();
+	ktsan_mtx_post_lock(lock, true, false, true);
 }
 
 static inline int do_raw_spin_trylock(raw_spinlock_t *lock)
 	__cond_acquires(true, lock)
 {
-	int ret = arch_spin_trylock(&(lock)->raw_lock);
+	int ret;
 
+	ktsan_mtx_pre_lock(lock, true, true);
+	ret = arch_spin_trylock(&(lock)->raw_lock);
 	if (ret)
 		mmiowb_spin_lock();
+	ktsan_mtx_post_lock(lock, true, true, ret);
 
 	return ret;
 }
 
 static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
 {
+	ktsan_mtx_pre_unlock(lock, true);
 	mmiowb_spin_unlock();
 	arch_spin_unlock(&lock->raw_lock);
+	ktsan_mtx_post_unlock(lock, true);
 	__release(lock);
 }
 #endif

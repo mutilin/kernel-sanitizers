@@ -14,6 +14,7 @@ obj-y        :=	init.o \
 		access.o \
 		memblock.o \
 		sync.o \
+		sync_mtx.o \
 		report.o \
 		instrumentation.o
 obj-$(CONFIG_KTSAN_STATS) += stat.o
@@ -33,6 +34,7 @@ CFLAGS_REMOVE_stat.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_access.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_memblock.o		:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_sync.o			:= -pg -O0 -O1 -O2
+CFLAGS_REMOVE_sync_mtx.o		:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_report.o			:= -pg -O0 -O1 -O2
 CFLAGS_REMOVE_instrumentation.o		:= -pg -O0 -O1 -O2
 
@@ -52,6 +54,7 @@ CFLAGS_stat.o			:= -O3 -fomit-frame-pointer
 CFLAGS_access.o			:= -O3 -fomit-frame-pointer
 CFLAGS_memblock.o		:= -O3 -fomit-frame-pointer
 CFLAGS_sync.o			:= -O3 -fomit-frame-pointer
+CFLAGS_sync_mtx.o		:= -O3 -fomit-frame-pointer
 CFLAGS_report.o			:= -O3 -fomit-frame-pointer
 CFLAGS_instrumentation.o	:= -O3 -fomit-frame-pointer
 
