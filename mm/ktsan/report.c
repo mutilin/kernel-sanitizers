@@ -5,7 +5,37 @@
 #include <linux/printk.h>
 #include <asm/barrier.h>
 
+/*
+ * Reports are printed with console output deferred: printk() only stores them
+ * in the log buffer, and the consoles print them later from irq_work.
+ *
+ * The runtime runs wherever an access is, console code included, so printing
+ * to the console directly can deadlock:
+ * - A race found under a console's port lock (serial_port_runtime_resume()
+ *   takes it) prints to that same console, and serial8250_console_write()
+ *   spins on the lock its own CPU holds.
+ * - The CPU holding kt_report_lock waits in printk() for the console owner to
+ *   hand the console over, while the owner found a race in console code and
+ *   spins on kt_report_lock.
+ * Deferred, nothing in here waits for a console. The cost: the log buffer
+ * (log_buf_len=) must hold a burst of reports until the consoles catch up,
+ * or the oldest are dropped ("printk messages dropped").
+ *
+ * printk_deferred_enter() needs irqs off; every caller is inside ENTER().
+ */
 static kt_spinlock_t kt_report_lock;
+
+static void kt_report_begin(void)
+{
+	printk_deferred_enter();
+	kt_spin_lock(&kt_report_lock);
+}
+
+static void kt_report_end(void)
+{
+	kt_spin_unlock(&kt_report_lock);
+	printk_deferred_exit();
+}
 
 static unsigned long racy_pc[32768];
 static unsigned int nracy_pc;
@@ -66,7 +96,7 @@ void kt_report_race(kt_thr_t *new, kt_race_info_t *info)
 			return;
 	}
 
-	kt_spin_lock(&kt_report_lock);
+	kt_report_begin();
 
 	if (nracy_pc < ARRAY_SIZE(racy_pc)) {
 		racy_pc[nracy_pc] = new_pc;
@@ -106,7 +136,7 @@ void kt_report_race(kt_thr_t *new, kt_race_info_t *info)
 
 	kt_stat_inc(kt_stat_reports);
 
-	kt_spin_unlock(&kt_report_lock);
+	kt_report_end();
 }
 
 /*
@@ -131,7 +161,7 @@ void kt_report_bad_mtx_unlock(kt_thr_t *new, uptr_t pc, kt_tab_sync_t *sync)
 	if (state.stack.size == 0)
 		return;
 
-	kt_spin_lock(&kt_report_lock);
+	kt_report_begin();
 
 	pr_err("==================================================================\n");
 	pr_err("ThreadSanitizer: lock 0x%px unlocked by a different thread\n\n",
@@ -148,5 +178,5 @@ void kt_report_bad_mtx_unlock(kt_thr_t *new, uptr_t pc, kt_tab_sync_t *sync)
 
 	kt_stat_inc(kt_stat_reports);
 
-	kt_spin_unlock(&kt_report_lock);
+	kt_report_end();
 }

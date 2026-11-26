@@ -35,7 +35,7 @@
 #define KT_MEMBLOCK_TAB_SIZE 196613
  
 #define KT_MAX_SYNC_COUNT (100 * 1000)
-#define KT_MAX_MEMBLOCK_COUNT (50 * 1000)
+#define KT_MAX_MEMBLOCK_COUNT (200 * 1000) /* as in the reference; 56 B each */
 #define KT_MAX_PERCPU_SYNC_COUNT (30 * 1000)
  
 #define KT_MAX_STACK_FRAMES 96

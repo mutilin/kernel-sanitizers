@@ -30,6 +30,7 @@
 #include <linux/debug_locks.h>
 #include <linux/osq_lock.h>
 #include <linux/hung_task.h>
+#include <linux/ktsan-checks.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/lock.h>
@@ -80,6 +81,16 @@ unsigned long mutex_get_owner(struct mutex *lock)
 }
 
 /*
+ * KTSAN hooks sit where the current task becomes the owner: the cmpxchg in
+ * __mutex_trylock_fast() and the one in __mutex_trylock_common() below. Every
+ * lock flavour (killable/interruptible/io/nested, ww_mutex, trylock,
+ * optimistic spin, handoff pickup) takes the lock through exactly one of them,
+ * in both CONFIG_DEBUG_LOCK_ALLOC configurations. A lock attempt that fails
+ * (signal, -EDEADLK, -EALREADY, trylock) never gets there, so it adds no
+ * edge. The unlock side is in mutex_unlock(). ktsan_mtx_pre_lock() has no
+ * single spot here; it is a no-op until deadlock detection, which will need
+ * it in the API functions.
+ *
  * Returns: __mutex_owner(lock) on failure or NULL on success.
  */
 static inline struct task_struct *__mutex_trylock_common(struct mutex *lock, bool handoff)
@@ -109,8 +120,11 @@ static inline struct task_struct *__mutex_trylock_common(struct mutex *lock, boo
 		}
 
 		if (atomic_long_try_cmpxchg_acquire(&lock->owner, &owner, task | flags)) {
-			if (task == curr)
+			if (task == curr) {
+				/* Slowpath, optimistic spin, handoff pickup, trylock. */
+				ktsan_mtx_post_lock(lock, true, false, true);
 				return NULL;
+			}
 			break;
 		}
 	}
@@ -158,8 +172,10 @@ static __always_inline bool __mutex_trylock_fast(struct mutex *lock)
 
 	MUTEX_WARN_ON(lock->magic != lock);
 
-	if (atomic_long_try_cmpxchg_acquire(&lock->owner, &zero, curr))
+	if (atomic_long_try_cmpxchg_acquire(&lock->owner, &zero, curr)) {
+		ktsan_mtx_post_lock(lock, true, false, true);
 		return true;
+	}
 
 	return false;
 }
@@ -575,11 +591,20 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
  */
 void __sched mutex_unlock(struct mutex *lock)
 {
+	/*
+	 * Every unlock (ww_mutex_unlock() too) comes here, and this is the
+	 * only caller of __mutex_unlock_slowpath(), handoff included. The
+	 * release goes in while the lock is still held.
+	 */
+	ktsan_mtx_pre_unlock(lock, true);
 #ifndef CONFIG_DEBUG_LOCK_ALLOC
-	if (__mutex_unlock_fast(lock))
+	if (__mutex_unlock_fast(lock)) {
+		ktsan_mtx_post_unlock(lock, true);
 		return;
+	}
 #endif
 	__mutex_unlock_slowpath(lock, _RET_IP_);
+	ktsan_mtx_post_unlock(lock, true);
 }
 EXPORT_SYMBOL(mutex_unlock);
 

@@ -56,8 +56,13 @@ kt_tab_sync_t *kt_sync_ensure_created(kt_thr_t *thr, uptr_t pc, uptr_t addr)
 	bool created;
 
 	sync = kt_tab_access(&kt_ctx.sync_tab, addr, &created, false);
-	if (KTSAN_WARN_ON(sync == NULL)) {
-		pr_err("KTSAN: limit on number of sync objects is reached\n");
+	if (unlikely(sync == NULL)) {
+		/* Deferred, as in report.c: this can run under a console's lock. */
+		printk_deferred_enter();
+		if (KTSAN_WARN_ON(true))
+			pr_err("KTSAN: limit on number of sync objects (%d) is reached, KTSAN is disabled\n",
+			       KT_MAX_SYNC_COUNT);
+		printk_deferred_exit();
 		return NULL;
 	}
 

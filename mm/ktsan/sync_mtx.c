@@ -30,8 +30,11 @@ static void kt_mtx_mismatch(kt_thr_t *thr, uptr_t pc, kt_tab_sync_t *sync,
 	if (printed >= 16)
 		return;
 	printed++;
+	/* Deferred, like the reports: this may run under a console's lock. */
+	printk_deferred_enter();
 	pr_err("KTSAN: %s of lock %px at %pS by thread %d (owner %d)\n", what,
 	       (void *)sync->tab.key, (void *)pc, thr->pid, sync->lock_tid);
+	printk_deferred_exit();
 }
 #else
 static inline void kt_mtx_mismatch(kt_thr_t *thr, uptr_t pc,

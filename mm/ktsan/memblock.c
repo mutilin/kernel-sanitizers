@@ -37,13 +37,49 @@ uptr_t kt_memblock_addr(uptr_t addr)
 	return (uptr_t)page_address(page);
 }
 
+/*
+ * memblock_tab is full: every one of its KT_MAX_MEMBLOCK_COUNT entries is a
+ * live block (slab object or page) that holds at least one sync object, e.g.
+ * a dentry with its d_lock. Disable KTSAN (KTSAN_WARN_ON) rather than BUG().
+ * Printed deferred, like the reports (see report.c): this can run under a
+ * console's lock.
+ */
+static void kt_memblock_tab_full(void)
+{
+	static bool reported;
+	kt_stats_t stat;
+
+	if (xchg(&reported, true))
+		return;
+
+	printk_deferred_enter();
+	KTSAN_WARN_ON(true);
+	pr_err("KTSAN: limit on number of memory blocks with sync objects (%d) is reached, KTSAN is disabled\n",
+	       KT_MAX_MEMBLOCK_COUNT);
+	if (IS_ENABLED(CONFIG_KTSAN_STATS)) {
+		kt_stat_collect(&stat);
+		pr_err("KTSAN: memblock objects %lu (alloc %lu, free %lu), sync objects %lu (alloc %lu, free %lu)\n",
+		       stat.stat[kt_stat_memblock_objects],
+		       stat.stat[kt_stat_memblock_alloc],
+		       stat.stat[kt_stat_memblock_free],
+		       stat.stat[kt_stat_sync_objects],
+		       stat.stat[kt_stat_sync_alloc],
+		       stat.stat[kt_stat_sync_free]);
+	}
+	printk_deferred_exit();
+}
+
+/* Returns the block locked, or NULL when memblock_tab is full. */
 static kt_tab_memblock_t *kt_memblock_ensure_created(kt_thr_t *thr, uptr_t addr)
 {
 	kt_tab_memblock_t *memblock;
 	bool created;
 
 	memblock = kt_tab_access(&kt_ctx.memblock_tab, addr, &created, false);
-	BUG_ON(memblock == NULL); /* Ran out of memory. */
+	if (unlikely(!memblock)) {
+		kt_memblock_tab_full();
+		return NULL;
+	}
 
 	if (created) {
 		INIT_LIST_HEAD(&memblock->sync_list);
@@ -61,6 +97,12 @@ void kt_memblock_add_sync(kt_thr_t *thr, uptr_t addr, kt_tab_sync_t *sync)
 	kt_tab_memblock_t *memblock;
 
 	memblock = kt_memblock_ensure_created(thr, addr);
+	/*
+	 * Table full, KTSAN is now off. The sync object stays unattached, like
+	 * one in vmalloc memory: it is never dropped.
+	 */
+	if (!memblock)
+		return;
 	list_add(&sync->list, &memblock->sync_list);
 	kt_spin_unlock(&memblock->tab.lock);
 }
